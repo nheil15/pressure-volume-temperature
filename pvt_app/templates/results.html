@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}PVT Analysis System | Results{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+    <div class="col-12">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <h1 class="h3 mb-1">Results</h1>
+                <p class="text-muted mb-0">Placeholder output using mock data from Flask.</p>
+            </div>
+            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Back to Input</a>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Placeholder Table</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Label</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results_table %}
+                            <tr>
+                                <td>{{ row.label }}</td>
+                                <td>{{ row.value }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Pressure vs Volume</h2>
+                <div class="chart-wrap">
+                    <canvas id="pvtChart" aria-label="PVT chart placeholder" role="img"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Results Summary</h2>
+                <ul class="mb-0">
+                    {% for item in summary %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.pvtChartData = {
+        pressure: {{ pressure | tojson }},
+        volume: {{ volume | tojson }}
+    };
+</script>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}PVT Analysis System | Input{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-12 col-lg-8">
+        <div class="card shadow-sm border-0">
+            <div class="card-body p-4 p-md-5">
+                <h1 class="h3 mb-3">PVT Input Form</h1>
+                <p class="text-muted mb-4">Enter the basic sample data that will later feed the analysis workflow.</p>
+
+                <form action="{{ url_for('analyze') }}" method="post" class="vstack gap-3">
+                    <div>
+                        <label for="temperature" class="form-label">Temperature</label>
+                        <input type="text" class="form-control" id="temperature" name="temperature" placeholder="e.g. 180">
+                    </div>
+
+                    <div>
+                        <label for="pressure_range" class="form-label">Pressure Range</label>
+                        <input type="text" class="form-control" id="pressure_range" name="pressure_range" placeholder="e.g. 5000-3000">
+                    </div>
+
+                    <div>
+                        <label for="cce_data" class="form-label">CCE Data</label>
+                        <textarea class="form-control" id="cce_data" name="cce_data" rows="5" placeholder="Paste CCE data here"></textarea>
+                    </div>
+
+                    <div>
+                        <label for="dl_data" class="form-label">DL Data</label>
+                        <textarea class="form-control" id="dl_data" name="dl_data" rows="5" placeholder="Paste DL data here"></textarea>
+                    </div>
+
+                    <div class="d-flex justify-content-end">
+                        <button type="submit" class="btn btn-primary">Analyze</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

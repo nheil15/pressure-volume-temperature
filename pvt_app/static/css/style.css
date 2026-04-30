@@ -1,0 +1,32 @@
+:root {
+    --pvt-bg: #f4f7fb;
+    --pvt-surface: #ffffff;
+    --pvt-border: #d9e2ec;
+    --pvt-text: #1f2937;
+    --pvt-muted: #6b7280;
+}
+
+body {
+    background: var(--pvt-bg);
+    color: var(--pvt-text);
+}
+
+main {
+    min-height: calc(100vh - 72px);
+}
+
+.card {
+    border: 1px solid var(--pvt-border);
+    border-radius: 1rem;
+    background: var(--pvt-surface);
+}
+
+.chart-wrap {
+    position: relative;
+    min-height: 320px;
+}
+
+canvas {
+    width: 100% !important;
+    height: 320px !important;
+}
