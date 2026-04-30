@@ -7,6 +7,8 @@ function initializeTableManagement() {
 
     const cceTable = document.getElementById('cce_table');
     const dlTable = document.getElementById('dl_table');
+    const compositionTable = document.getElementById('composition_table');
+    const compositionAddRowBtn = document.getElementById('composition_add_row');
     const cceAddRowBtn = document.getElementById('cce_add_row');
     const dlAddRowBtn = document.getElementById('dl_add_row');
     const dlAddPropertiesBtn = document.getElementById('dl_add_properties');
@@ -151,7 +153,14 @@ function initializeTableManagement() {
         const tbody = table.querySelector('tbody');
         const newRow = document.createElement('tr');
 
-        if (tableId === 'dl_table') {
+        if (tableId === 'composition_table') {
+            newRow.innerHTML = `
+                <td><input type="text" class="form-control form-control-sm" placeholder="Component (e.g. C1)"></td>
+                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
+                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight"></td>
+                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
+            `;
+        } else if (tableId === 'dl_table') {
             newRow.appendChild(createNumberCell('0.1', 'Pressure', 'pressure'));
             newRow.appendChild(createNumberCell('0.0001', 'Bo', 'bo'));
 
@@ -175,6 +184,32 @@ function initializeTableManagement() {
         }
 
         tbody.appendChild(newRow);
+    }
+
+    function compositionTableToCSV() {
+        if (!compositionTable) {
+            return '';
+        }
+
+        const rows = compositionTable.querySelectorAll('tbody tr');
+        const data = ['Component,% Mole Fraction,Mole Weight,Specific Gravity'];
+
+        rows.forEach((row) => {
+            const cells = row.querySelectorAll('td');
+            const componentInput = cells[0]?.querySelector('input[type="text"]');
+            const numberInputs = row.querySelectorAll('input[type="number"]');
+
+            const component = componentInput ? componentInput.value.trim() : '';
+            const moleFraction = numberInputs[0] ? numberInputs[0].value.trim() : '';
+            const moleWeight = numberInputs[1] ? numberInputs[1].value.trim() : '';
+            const specificGravity = numberInputs[2] ? numberInputs[2].value.trim() : '';
+
+            if (component || moleFraction || moleWeight || specificGravity) {
+                data.push([component, moleFraction, moleWeight, specificGravity].join(','));
+            }
+        });
+
+        return data.join('\n');
     }
 
     function setupBubblePointToggle(radio, tableId) {
@@ -241,6 +276,13 @@ function initializeTableManagement() {
         });
     }
 
+    if (compositionAddRowBtn) {
+        compositionAddRowBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            addRowToTable('composition_table');
+        });
+    }
+
     if (dlAddRowBtn) {
         dlAddRowBtn.addEventListener('click', (e) => {
             e.preventDefault();
@@ -291,9 +333,11 @@ function initializeTableManagement() {
 
             const cceCSV = tableToCSV('cce_table');
             const dlCSV = tableToCSV('dl_table');
+            const compositionCSV = compositionTableToCSV();
 
             document.getElementById('cce_data').value = cceCSV;
             document.getElementById('dl_data').value = dlCSV;
+            document.getElementById('composition_data').value = compositionCSV;
 
             form.submit();
         });
@@ -406,6 +450,106 @@ function initializeCharts() {
 
     buildChart('cceChart', 'CCE: Relative Volume vs Pressure', 'Experimental CCE', 'Simulated CCE', resultData.cce);
     buildChart('dlChart', 'DL: Oil Volume Factor vs Pressure', 'Experimental DL', 'Simulated DL', resultData.dl);
+
+    const buildMultiLineChart = (canvasId, title, datasets, yAxisTitle) => {
+        const canvas = document.getElementById(canvasId);
+
+        if (!canvas) {
+            return;
+        }
+
+        new Chart(canvas, {
+            type: 'line',
+            data: { datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true },
+                    title: { display: true, text: title },
+                    bubbleLinePlugin: {
+                        bubblePoint,
+                    },
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        title: {
+                            display: true,
+                            text: 'Pressure (psig)',
+                        },
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: yAxisTitle,
+                        },
+                    },
+                },
+            },
+            plugins: [bubbleLinePlugin],
+        });
+    };
+
+    if (resultData.fingerprint) {
+        buildMultiLineChart('fingerprintChart', 'Fingerprint Plot', [
+            {
+                label: 'CCE Simulated',
+                data: createPoints(resultData.fingerprint.pressure, resultData.fingerprint.cce),
+                borderColor: '#0d6efd',
+                backgroundColor: 'rgba(13, 110, 253, 0.15)',
+                tension: 0.25,
+                fill: false,
+            },
+            {
+                label: 'DL Simulated',
+                data: createPoints(resultData.fingerprint.pressure, resultData.fingerprint.dl),
+                borderColor: '#198754',
+                backgroundColor: 'rgba(25, 135, 84, 0.12)',
+                tension: 0.25,
+                fill: false,
+            },
+            {
+                label: 'Fingerprint Index',
+                data: createPoints(resultData.fingerprint.pressure, resultData.fingerprint.fingerprintIndex),
+                borderColor: '#6c757d',
+                backgroundColor: 'rgba(108, 117, 125, 0.15)',
+                borderDash: [6, 4],
+                tension: 0.2,
+                fill: false,
+            },
+        ], 'Normalized Value');
+    }
+
+    if (resultData.phaseEnvelope) {
+        buildMultiLineChart('phaseEnvelopeChart', 'Phase Envelope Plot', [
+            {
+                label: 'Lower Boundary',
+                data: createPoints(resultData.phaseEnvelope.pressure, resultData.phaseEnvelope.lower),
+                borderColor: '#dc3545',
+                backgroundColor: 'rgba(220, 53, 69, 0.12)',
+                tension: 0.25,
+                fill: false,
+            },
+            {
+                label: 'Midline',
+                data: createPoints(resultData.phaseEnvelope.pressure, resultData.phaseEnvelope.mid),
+                borderColor: '#6c757d',
+                backgroundColor: 'rgba(108, 117, 125, 0.12)',
+                borderDash: [4, 4],
+                tension: 0.25,
+                fill: false,
+            },
+            {
+                label: 'Upper Boundary',
+                data: createPoints(resultData.phaseEnvelope.pressure, resultData.phaseEnvelope.upper),
+                borderColor: '#fd7e14',
+                backgroundColor: 'rgba(253, 126, 20, 0.12)',
+                tension: 0.25,
+                fill: false,
+            },
+        ], 'Envelope Value');
+    }
 }
 
 // ===== Form Validation =====
@@ -414,7 +558,6 @@ function validateFormInput() {
     const temperature = document.getElementById('reservoir_temperature').value.trim();
     const pressureMin = document.getElementById('pressure_min').value.trim();
     const pressureMax = document.getElementById('pressure_max').value.trim();
-    const pressureStep = document.getElementById('pressure_step').value.trim();
 
     // Validate temperature
     if (!temperature) {
@@ -427,9 +570,6 @@ function validateFormInput() {
     }
     if (!pressureMax) {
         errors.push('Maximum pressure is required.');
-    }
-    if (!pressureStep) {
-        errors.push('Pressure step is required.');
     }
 
     // Validate data tables

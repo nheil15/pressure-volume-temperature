@@ -59,11 +59,6 @@
                             <label for="pressure_max" class="form-label">Max Pressure</label>
                             <input type="number" step="0.1" class="form-control" id="pressure_max" name="pressure_max" placeholder="5000">
                         </div>
-
-                        <div class="col-md-2">
-                            <label for="pressure_step" class="form-label">Step</label>
-                            <input type="number" step="0.1" class="form-control" id="pressure_step" name="pressure_step" placeholder="500">
-                        </div>
                     </div>
 
                     <div class="alert alert-light border small mb-0">
@@ -71,6 +66,34 @@
                     </div>
 
                     <div class="row g-4">
+                        <div class="col-12">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <label class="form-label mb-0">Reservoir Fluid Composition</label>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="composition_add_row">+ Add Row</button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered mb-0" id="composition_table">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 25%;">Component</th>
+                                            <th style="width: 25%;">% Mole Fraction</th>
+                                            <th style="width: 25%;">Mole Weight</th>
+                                            <th style="width: 25%;">Specific Gravity</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><input type="text" class="form-control form-control-sm" placeholder="Component (e.g. C1)"></td>
+                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
+                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight"></td>
+                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <textarea class="form-control d-none" id="composition_data" name="composition_data" rows="5"></textarea>
+                        </div>
+
                         <div class="col-12">
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <label class="form-label mb-0">CCE Data</label>

@@ -213,6 +213,35 @@ def compute_rmse(experimental_values, simulated_values):
     return float(np.sqrt(np.mean(np.square(error))))
 
 
+def prepare_simulation_properties_table(pressure_values, cce_simulated, dl_simulated):
+    """Build a compact table of simulation-derived PVT properties."""
+    return [
+        {
+            "pressure": round(float(pressure), 2),
+            "cce_relative_volume": round(float(cce_value), 4),
+            "dl_bo": round(float(dl_value), 4),
+            "fingerprint_index": round((float(cce_value) + float(dl_value)) / 2.0, 4),
+            "phase_min": round(min(float(cce_value), float(dl_value)), 4),
+            "phase_max": round(max(float(cce_value), float(dl_value)), 4),
+        }
+        for pressure, cce_value, dl_value in zip(pressure_values, cce_simulated, dl_simulated)
+    ]
+
+
+def prepare_series_payload(pressure_values, cce_simulated, dl_simulated):
+    """Create combined series used by the fingerprint and phase-envelope plots."""
+    pressure_list = [float(value) for value in pressure_values]
+    cce_list = [float(value) for value in cce_simulated]
+    dl_list = [float(value) for value in dl_simulated]
+
+    return {
+        "pressure": pressure_list,
+        "fingerprint": [round((cce + dl) / 2.0, 4) for cce, dl in zip(cce_list, dl_list)],
+        "phase_lower": [round(min(cce, dl), 4) for cce, dl in zip(cce_list, dl_list)],
+        "phase_upper": [round(max(cce, dl), 4) for cce, dl in zip(cce_list, dl_list)],
+    }
+
+
 def make_interpretation(bubble_point_pressure, rmse_value, first_volume, last_volume):
     """Generate a short explanation for the results section."""
     trend = "As pressure decreases, volume increases in the simplified model."
@@ -281,6 +310,7 @@ def analyze():
     )
 
     cce_simulated_axis, dl_simulated_axis = compute_simulation(pressure_axis, reservoir_temperature, bubble_point_pressure)
+    combined_series = prepare_series_payload(pressure_axis, cce_simulated_axis, dl_simulated_axis)
 
     cce_pressure = cce_data["pressure"].to_numpy(dtype=float)
     cce_experimental = cce_data.iloc[:, 1].to_numpy(dtype=float)
@@ -311,6 +341,19 @@ def analyze():
             "simulated": dl_simulated.tolist(),
             "table": prepare_comparison_table(dl_pressure, dl_experimental, dl_simulated),
             "rmse": compute_rmse(dl_experimental, dl_simulated),
+        },
+        "simulation_properties": prepare_simulation_properties_table(pressure_axis, cce_simulated_axis, dl_simulated_axis),
+        "fingerprint": {
+            "pressure": combined_series["pressure"],
+            "fingerprint_index": combined_series["fingerprint"],
+            "cce": [round(float(value), 4) for value in cce_simulated_axis.tolist()],
+            "dl": [round(float(value), 4) for value in dl_simulated_axis.tolist()],
+        },
+        "phase_envelope": {
+            "pressure": combined_series["pressure"],
+            "lower": combined_series["phase_lower"],
+            "upper": combined_series["phase_upper"],
+            "mid": [round((lower + upper) / 2.0, 4) for lower, upper in zip(combined_series["phase_lower"], combined_series["phase_upper"])],
         },
     }
 
@@ -355,6 +398,19 @@ def results():
                 "simulated": dl_simulated_axis[:5].tolist(),
                 "table": prepare_comparison_table(pressure_axis[:5], dl_experimental, dl_simulated_axis[:5]),
                 "rmse": compute_rmse(dl_experimental, dl_simulated_axis[:5]),
+            },
+            "simulation_properties": prepare_simulation_properties_table(pressure_axis[:5], cce_simulated_axis[:5], dl_simulated_axis[:5]),
+            "fingerprint": {
+                "pressure": pressure_axis[:5].tolist(),
+                "fingerprint_index": [round((cce + dl) / 2.0, 4) for cce, dl in zip(cce_simulated_axis[:5], dl_simulated_axis[:5])],
+                "cce": [round(float(value), 4) for value in cce_simulated_axis[:5].tolist()],
+                "dl": [round(float(value), 4) for value in dl_simulated_axis[:5].tolist()],
+            },
+            "phase_envelope": {
+                "pressure": pressure_axis[:5].tolist(),
+                "lower": [round(min(cce, dl), 4) for cce, dl in zip(cce_simulated_axis[:5], dl_simulated_axis[:5])],
+                "upper": [round(max(cce, dl), 4) for cce, dl in zip(cce_simulated_axis[:5], dl_simulated_axis[:5])],
+                "mid": [round((cce + dl) / 2.0, 4) for cce, dl in zip(cce_simulated_axis[:5], dl_simulated_axis[:5])],
             },
         }
 

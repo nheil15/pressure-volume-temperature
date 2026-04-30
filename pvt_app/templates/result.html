@@ -76,6 +76,64 @@
     <div class="col-12 col-xl-6">
         <div class="card shadow-sm h-100">
             <div class="card-body">
+                <h2 class="h5 mb-3">Fingerprint Plot</h2>
+                <p class="text-muted small mb-3">Simplified fingerprint of the simulated CCE and DL trends.</p>
+                <div class="chart-wrap">
+                    <canvas id="fingerprintChart" aria-label="Fingerprint plot" role="img"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Phase Envelope Plot</h2>
+                <p class="text-muted small mb-3">Simplified envelope derived from the simulated CCE and DL curves.</p>
+                <div class="chart-wrap">
+                    <canvas id="phaseEnvelopeChart" aria-label="Phase envelope plot" role="img"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">PVT Properties From Simulation</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Pressure</th>
+                                <th>CCE Relative Volume</th>
+                                <th>DL Bo</th>
+                                <th>Fingerprint Index</th>
+                                <th>Phase Min</th>
+                                <th>Phase Max</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results.simulation_properties %}
+                            <tr>
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.cce_relative_volume }}</td>
+                                <td>{{ row.dl_bo }}</td>
+                                <td>{{ row.fingerprint_index }}</td>
+                                <td>{{ row.phase_min }}</td>
+                                <td>{{ row.phase_max }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
                 <h2 class="h5 mb-3">CCE Comparison Table</h2>
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
@@ -146,6 +204,18 @@
             pressure: {{ results.dl.pressure | tojson }},
             experimental: {{ results.dl.experimental | tojson }},
             simulated: {{ results.dl.simulated | tojson }},
+        },
+        fingerprint: {
+            pressure: {{ results.fingerprint.pressure | tojson }},
+            fingerprintIndex: {{ results.fingerprint.fingerprint_index | tojson }},
+            cce: {{ results.fingerprint.cce | tojson }},
+            dl: {{ results.fingerprint.dl | tojson }},
+        },
+        phaseEnvelope: {
+            pressure: {{ results.phase_envelope.pressure | tojson }},
+            lower: {{ results.phase_envelope.lower | tojson }},
+            upper: {{ results.phase_envelope.upper | tojson }},
+            mid: {{ results.phase_envelope.mid | tojson }},
         }
     };
 </script>
