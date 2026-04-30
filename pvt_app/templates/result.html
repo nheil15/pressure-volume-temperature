@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}PVT Analysis System | Results{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+    <div class="col-12">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <h1 class="h3 mb-1">Analysis Results</h1>
+                <p class="text-muted mb-0">Simplified PVT simulation using the submitted reservoir inputs.</p>
+            </div>
+            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Back to Input</a>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Results Summary</h2>
+                <div class="summary-stat">
+                    <span class="summary-label">Reservoir Temperature</span>
+                    <strong>{{ results.reservoir_temperature }} °F</strong>
+                </div>
+                <div class="summary-stat">
+                    <span class="summary-label">Bubble Point Pressure</span>
+                    <strong>{{ results.bubble_point_pressure | round(1) }} psig</strong>
+                </div>
+                <div class="summary-stat">
+                    <span class="summary-label">CCE RMSE</span>
+                    <strong>{{ results.cce.rmse | round(4) }}</strong>
+                </div>
+                <div class="summary-stat mb-0">
+                    <span class="summary-label">DL RMSE</span>
+                    <strong>{{ results.dl.rmse | round(4) }}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-8">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Interpretation</h2>
+                <p class="mb-0">{{ results.interpretation }}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">CCE Graph</h2>
+                <div class="chart-wrap">
+                    <canvas id="cceChart" aria-label="CCE graph" role="img"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">DL Graph</h2>
+                <div class="chart-wrap">
+                    <canvas id="dlChart" aria-label="DL graph" role="img"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">CCE Comparison Table</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Pressure</th>
+                                <th>Experimental</th>
+                                <th>Simulated</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results.cce.table %}
+                            <tr>
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.experimental }}</td>
+                                <td>{{ row.simulated }}</td>
+                                <td>{{ row.error }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5 mb-3">DL Comparison Table</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Pressure</th>
+                                <th>Experimental</th>
+                                <th>Simulated</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results.dl.table %}
+                            <tr>
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.experimental }}</td>
+                                <td>{{ row.simulated }}</td>
+                                <td>{{ row.error }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.pvtResultData = {
+        bubblePointPressure: {{ results.bubble_point_pressure | tojson }},
+        cce: {
+            pressure: {{ results.cce.pressure | tojson }},
+            experimental: {{ results.cce.experimental | tojson }},
+            simulated: {{ results.cce.simulated | tojson }},
+        },
+        dl: {
+            pressure: {{ results.dl.pressure | tojson }},
+            experimental: {{ results.dl.experimental | tojson }},
+            simulated: {{ results.dl.simulated | tojson }},
+        }
+    };
+</script>
+{% endblock %}

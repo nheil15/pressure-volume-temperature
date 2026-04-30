@@ -2,39 +2,170 @@
 
 {% block title %}PVT Analysis System | Input{% endblock %}
 
+{% block extra_head %}
+<style>
+    .table-input-wrapper {
+        position: relative;
+    }
+
+    .form-control-sm {
+        font-size: 0.875rem;
+        padding: 0.25rem 0.5rem;
+        height: auto;
+    }
+
+    .table-sm thead th {
+        font-size: 0.875rem;
+        padding: 0.5rem;
+    }
+
+    .table-sm td {
+        padding: 0.25rem;
+    }
+
+    .bubble-marker {
+        color: #dc3545;
+        font-weight: bold;
+    }
+
+    .dl-property-chip-selected {
+        background-color: #495057 !important;
+        border-color: #495057 !important;
+        color: #ffffff !important;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-12 col-lg-8">
         <div class="card shadow-sm border-0">
             <div class="card-body p-4 p-md-5">
-                <h1 class="h3 mb-3">PVT Input Form</h1>
-                <p class="text-muted mb-4">Enter the basic sample data that will later feed the analysis workflow.</p>
+                <h1 class="h3 mb-3">PVT Analysis</h1>
+                
+                <form action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" class="vstack gap-4" id="pvt_form">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="reservoir_temperature" class="form-label">Reservoir Temperature (°F)</label>
+                            <input type="number" step="0.1" class="form-control" id="reservoir_temperature" name="reservoir_temperature" placeholder="e.g. 180">
+                        </div>
 
-                <form action="{{ url_for('analyze') }}" method="post" class="vstack gap-3">
-                    <div>
-                        <label for="temperature" class="form-label">Temperature</label>
-                        <input type="text" class="form-control" id="temperature" name="temperature" placeholder="e.g. 180">
+                        <div class="col-md-2">
+                            <label for="pressure_min" class="form-label">Min Pressure</label>
+                            <input type="number" step="0.1" class="form-control" id="pressure_min" name="pressure_min" placeholder="2000">
+                        </div>
+
+                        <div class="col-md-2">
+                            <label for="pressure_max" class="form-label">Max Pressure</label>
+                            <input type="number" step="0.1" class="form-control" id="pressure_max" name="pressure_max" placeholder="5000">
+                        </div>
+
+                        <div class="col-md-2">
+                            <label for="pressure_step" class="form-label">Step</label>
+                            <input type="number" step="0.1" class="form-control" id="pressure_step" name="pressure_step" placeholder="500">
+                        </div>
                     </div>
 
-                    <div>
-                        <label for="pressure_range" class="form-label">Pressure Range</label>
-                        <input type="text" class="form-control" id="pressure_range" name="pressure_range" placeholder="e.g. 5000-3000">
+                    <div class="alert alert-light border small mb-0">
+                        Manual format: each line should contain <strong>pressure, value</strong>. For CSV files, include a pressure column and a value column.
                     </div>
 
-                    <div>
-                        <label for="cce_data" class="form-label">CCE Data</label>
-                        <textarea class="form-control" id="cce_data" name="cce_data" rows="5" placeholder="Paste CCE data here"></textarea>
-                    </div>
+                    <div class="row g-4">
+                        <div class="col-12">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <label class="form-label mb-0">CCE Data</label>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="cce_add_row">+ Add Row</button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered mb-2" id="cce_table">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 40%;">Pressure (PSIG)</th>
+                                            <th style="width: 40%;">Relative Volume</th>
+                                            <th style="width: 20%;">Bubble Point</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
+                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Value"></td>
+                                            <td class="text-center"><input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="mt-2">
+                                <input type="file" class="form-control form-control-sm" id="cce_file" name="cce_file" accept=".csv">
+                            </div>
+                            <textarea class="form-control d-none" id="cce_data" name="cce_data" rows="5"></textarea>
+                        </div>
 
-                    <div>
-                        <label for="dl_data" class="form-label">DL Data</label>
-                        <textarea class="form-control" id="dl_data" name="dl_data" rows="5" placeholder="Paste DL data here"></textarea>
+                        <div class="col-12">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <label class="form-label mb-0">DL Data</label>
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-primary" id="dl_add_row">+ Add Row</button>
+                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                        DL Properties
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-end p-3 shadow" style="min-width: 18rem;" id="dl_property_menu">
+                                        <div class="fw-semibold mb-1">Add DL property columns</div>
+                                        <p class="text-muted small mb-2">Choose the extra PVT properties you want to add to the DL table.</p>
+                                        <div class="d-grid gap-2" id="dl_property_choices">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="solution_gor">Solution GOR (Mscf/stb)</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_deviation_factor_z">Gas Deviation Factor Z</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="reservoir_oil_density">Reservoir Oil Density (lb/ft3)</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_relative_density">Gas Relative Density</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_volume_factor">Gas Volume Factor (rb/Mscf)</button>
+                                        </div>
+                                        <button type="button" class="btn btn-primary btn-sm w-100 mt-3" id="dl_add_properties">Change</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered mb-2" id="dl_table">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th data-field="pressure" style="width: 40%;">Pressure (PSIG)</th>
+                                            <th data-field="bo" style="width: 40%;">Oil Volume Factor (Bo)</th>
+                                            <th data-field="bubble_point" style="width: 20%;">Bubble Point</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td data-field="pressure"><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
+                                            <td data-field="bo"><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Bo"></td>
+                                            <td data-field="bubble_point" class="text-center"><input type="radio" name="dl_bubble" class="form-check-input dl-bubble-radio"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="mt-2">
+                                <input type="file" class="form-control form-control-sm" id="dl_file" name="dl_file" accept=".csv">
+                            </div>
+                            <textarea class="form-control d-none" id="dl_data" name="dl_data" rows="5"></textarea>
+                        </div>
                     </div>
 
                     <div class="d-flex justify-content-end">
-                        <button type="submit" class="btn btn-primary">Analyze</button>
+                        <button type="submit" class="btn btn-primary px-4">Run Analysis</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Error Modal -->
+<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-danger">
+            <div class="modal-header bg-danger-subtle border-danger">
+                <h5 class="modal-title text-danger" id="errorModalLabel">Validation Error</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="errorMessage"></p>
             </div>
         </div>
     </div>

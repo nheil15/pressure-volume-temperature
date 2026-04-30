@@ -26,6 +26,20 @@ main {
     min-height: 320px;
 }
 
+.summary-stat {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--pvt-border);
+}
+
+.summary-label {
+    color: var(--pvt-muted);
+    font-size: 0.95rem;
+}
+
 canvas {
     width: 100% !important;
     height: 320px !important;
