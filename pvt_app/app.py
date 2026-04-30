@@ -1,12 +1,13 @@
 import csv
 import io
+import os
 
 import numpy as np
 import pandas as pd
 from flask import Flask, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
-app.secret_key = "pvt-mvp-secret-key"
+app.secret_key = os.environ.get("SECRET_KEY", "pvt-mvp-secret-key")
 
 KNOWN_BUBBLE_POINT = 2516.7
 
