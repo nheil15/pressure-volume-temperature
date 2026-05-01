@@ -3,7 +3,7 @@
 {% block title %}PVT Analysis System | Results{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 {% endblock %}
 
 {% block content %}
@@ -25,6 +25,10 @@
                 <div class="summary-stat">
                     <span class="summary-label">Reservoir Temperature</span>
                     <strong>{{ results.reservoir_temperature }} °F</strong>
+                </div>
+                <div class="summary-stat">
+                    <span class="summary-label">Submitted Pressure Range</span>
+                    <strong>{{ results.submitted_inputs.pressure_min | round(1) }} - {{ results.submitted_inputs.pressure_max | round(1) }} psig</strong>
                 </div>
                 <div class="summary-stat">
                     <span class="summary-label">Bubble Point Pressure</span>
@@ -56,7 +60,7 @@
             <div class="card-body">
                 <h2 class="h5 mb-3">CCE Graph</h2>
                 <div class="chart-wrap">
-                    <canvas id="cceChart" aria-label="CCE graph" role="img"></canvas>
+                    <div id="cceChart" aria-label="CCE graph" role="img"></div>
                 </div>
             </div>
         </div>
@@ -67,7 +71,7 @@
             <div class="card-body">
                 <h2 class="h5 mb-3">DL Graph</h2>
                 <div class="chart-wrap">
-                    <canvas id="dlChart" aria-label="DL graph" role="img"></canvas>
+                    <div id="dlChart" aria-label="DL graph" role="img"></div>
                 </div>
             </div>
         </div>
@@ -77,9 +81,8 @@
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <h2 class="h5 mb-3">Fingerprint Plot</h2>
-                <p class="text-muted small mb-3">Simplified fingerprint of the simulated CCE and DL trends.</p>
                 <div class="chart-wrap">
-                    <canvas id="fingerprintChart" aria-label="Fingerprint plot" role="img"></canvas>
+                    <div id="fingerprintChart" aria-label="Fingerprint plot" role="img"></div>
                 </div>
             </div>
         </div>
@@ -89,9 +92,8 @@
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <h2 class="h5 mb-3">Phase Envelope Plot</h2>
-                <p class="text-muted small mb-3">Simplified envelope derived from the simulated CCE and DL curves.</p>
                 <div class="chart-wrap">
-                    <canvas id="phaseEnvelopeChart" aria-label="Phase envelope plot" role="img"></canvas>
+                    <div id="phaseEnvelopeChart" aria-label="Phase envelope plot" role="img"></div>
                 </div>
             </div>
         </div>
@@ -108,6 +110,9 @@
                                 <th>Pressure</th>
                                 <th>CCE Relative Volume</th>
                                 <th>DL Bo</th>
+                                <th>DL Rs (scf/stb)</th>
+                                <th>DL Gas Z</th>
+                                <th>Oil Density (lb/ft3)</th>
                                 <th>Fingerprint Index</th>
                                 <th>Phase Min</th>
                                 <th>Phase Max</th>
@@ -119,6 +124,9 @@
                                 <td>{{ row.pressure }}</td>
                                 <td>{{ row.cce_relative_volume }}</td>
                                 <td>{{ row.dl_bo }}</td>
+                                <td>{{ row.dl_rs }}</td>
+                                <td>{{ row.dl_z }}</td>
+                                <td>{{ row.oil_density }}</td>
                                 <td>{{ row.fingerprint_index }}</td>
                                 <td>{{ row.phase_min }}</td>
                                 <td>{{ row.phase_max }}</td>
@@ -192,31 +200,5 @@
     </div>
 </div>
 
-<script>
-    window.pvtResultData = {
-        bubblePointPressure: {{ results.bubble_point_pressure | tojson }},
-        cce: {
-            pressure: {{ results.cce.pressure | tojson }},
-            experimental: {{ results.cce.experimental | tojson }},
-            simulated: {{ results.cce.simulated | tojson }},
-        },
-        dl: {
-            pressure: {{ results.dl.pressure | tojson }},
-            experimental: {{ results.dl.experimental | tojson }},
-            simulated: {{ results.dl.simulated | tojson }},
-        },
-        fingerprint: {
-            pressure: {{ results.fingerprint.pressure | tojson }},
-            fingerprintIndex: {{ results.fingerprint.fingerprint_index | tojson }},
-            cce: {{ results.fingerprint.cce | tojson }},
-            dl: {{ results.fingerprint.dl | tojson }},
-        },
-        phaseEnvelope: {
-            pressure: {{ results.phase_envelope.pressure | tojson }},
-            lower: {{ results.phase_envelope.lower | tojson }},
-            upper: {{ results.phase_envelope.upper | tojson }},
-            mid: {{ results.phase_envelope.mid | tojson }},
-        }
-    };
-</script>
+<script type="application/json" id="pvt-result-data">{{ results | tojson }}</script>
 {% endblock %}

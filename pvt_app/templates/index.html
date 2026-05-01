@@ -23,6 +23,15 @@
         padding: 0.25rem;
     }
 
+    .table-scroll-5 {
+        max-height: 16.5rem;
+        overflow-y: auto;
+    }
+
+    .table-scroll-5 table {
+        margin-bottom: 0;
+    }
+
     .bubble-marker {
         color: #dc3545;
         font-weight: bold;
@@ -44,8 +53,9 @@
                 <h1 class="h3 mb-3">PVT Analysis</h1>
                 
                 <form action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" class="vstack gap-4" id="pvt_form">
+                    <input type="hidden" id="saturation_pressure" name="saturation_pressure">
                     <div class="row g-3">
-                        <div class="col-md-6">
+                        <div class="col-md-5">
                             <label for="reservoir_temperature" class="form-label">Reservoir Temperature (°F)</label>
                             <input type="number" step="0.1" class="form-control" id="reservoir_temperature" name="reservoir_temperature" placeholder="e.g. 180">
                         </div>
@@ -69,9 +79,12 @@
                         <div class="col-12">
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <label class="form-label mb-0">Reservoir Fluid Composition</label>
-                                <button type="button" class="btn btn-sm btn-outline-primary" id="composition_add_row">+ Add Row</button>
+                                <div class="btn-group btn-group-sm dropdown">
+                                    <button type="button" class="btn btn-outline-danger" id="composition_delete_all">Delete All</button>
+                                    <button type="button" class="btn btn-outline-primary" id="composition_add_row">+ Add Row</button>
+                                </div>
                             </div>
-                            <div class="table-responsive">
+                            <div class="table-responsive table-scroll-5">
                                 <table class="table table-sm table-bordered mb-0" id="composition_table">
                                     <thead class="table-light">
                                         <tr>
@@ -79,6 +92,7 @@
                                             <th style="width: 25%;">% Mole Fraction</th>
                                             <th style="width: 25%;">Mole Weight</th>
                                             <th style="width: 25%;">Specific Gravity</th>
+                                            <th style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -87,9 +101,14 @@
                                             <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
                                             <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight"></td>
                                             <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
+                                            <td class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                            <div class="mt-2 d-flex align-items-center gap-2">
+                                <input type="file" class="form-control form-control-sm" id="composition_file" accept=".csv">
+                                <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" id="composition_convert_btn">Convert</button>
                             </div>
                             <textarea class="form-control d-none" id="composition_data" name="composition_data" rows="5"></textarea>
                         </div>
@@ -97,15 +116,19 @@
                         <div class="col-12">
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <label class="form-label mb-0">CCE Data</label>
-                                <button type="button" class="btn btn-sm btn-outline-primary" id="cce_add_row">+ Add Row</button>
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-danger" id="cce_delete_all">Delete All</button>
+                                    <button type="button" class="btn btn-outline-primary" id="cce_add_row">+ Add Row</button>
+                                </div>
                             </div>
-                            <div class="table-responsive">
+                            <div class="table-responsive table-scroll-5">
                                 <table class="table table-sm table-bordered mb-2" id="cce_table">
                                     <thead class="table-light">
                                         <tr>
                                             <th style="width: 40%;">Pressure (PSIG)</th>
                                             <th style="width: 40%;">Relative Volume</th>
                                             <th style="width: 20%;">Bubble Point</th>
+                                            <th style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -113,12 +136,14 @@
                                             <td><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
                                             <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Value"></td>
                                             <td class="text-center"><input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio"></td>
+                                            <td class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="mt-2">
+                            <div class="mt-2 d-flex align-items-center gap-2">
                                 <input type="file" class="form-control form-control-sm" id="cce_file" name="cce_file" accept=".csv">
+                                <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" id="cce_convert_btn">Convert</button>
                             </div>
                             <textarea class="form-control d-none" id="cce_data" name="cce_data" rows="5"></textarea>
                         </div>
@@ -127,8 +152,9 @@
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <label class="form-label mb-0">DL Data</label>
                                 <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-danger" id="dl_delete_all">Delete All</button>
                                     <button type="button" class="btn btn-outline-primary" id="dl_add_row">+ Add Row</button>
-                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="false" aria-expanded="false">
                                         DL Properties
                                     </button>
                                     <div class="dropdown-menu dropdown-menu-end p-3 shadow" style="min-width: 18rem;" id="dl_property_menu">
@@ -145,13 +171,14 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="table-responsive">
+                            <div class="table-responsive table-scroll-5">
                                 <table class="table table-sm table-bordered mb-2" id="dl_table">
                                     <thead class="table-light">
                                         <tr>
                                             <th data-field="pressure" style="width: 40%;">Pressure (PSIG)</th>
                                             <th data-field="bo" style="width: 40%;">Oil Volume Factor (Bo)</th>
                                             <th data-field="bubble_point" style="width: 20%;">Bubble Point</th>
+                                            <th data-field="action" style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -159,12 +186,14 @@
                                             <td data-field="pressure"><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
                                             <td data-field="bo"><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Bo"></td>
                                             <td data-field="bubble_point" class="text-center"><input type="radio" name="dl_bubble" class="form-check-input dl-bubble-radio"></td>
+                                            <td data-field="action" class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="mt-2">
+                            <div class="mt-2 d-flex align-items-center gap-2">
                                 <input type="file" class="form-control form-control-sm" id="dl_file" name="dl_file" accept=".csv">
+                                <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" id="dl_convert_btn">Convert</button>
                             </div>
                             <textarea class="form-control d-none" id="dl_data" name="dl_data" rows="5"></textarea>
                         </div>
@@ -184,7 +213,7 @@
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-danger">
             <div class="modal-header bg-danger-subtle border-danger">
-                <h5 class="modal-title text-danger" id="errorModalLabel">Validation Error</h5>
+                <h5 class="modal-title text-danger" id="errorModalLabel">Error</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
