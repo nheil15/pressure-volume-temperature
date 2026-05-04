@@ -493,7 +493,7 @@ def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_po
     # Extend the temperature domain so the cricondentherm is not forced by the axis end.
     temp_min_f = max(-20.0, float(operating_temperature_f) - 180.0)
     temp_max_f = min(900.0, max(float(operating_temperature_f) + 420.0, 650.0 + 120.0 * np.clip(heavy_fraction, 0.0, 0.8)))
-    base_axis = np.linspace(temp_min_f, temp_max_f, 151)
+    base_axis = np.linspace(temp_min_f, temp_max_f, 301)
     temperature_axis = np.unique(np.sort(np.append(base_axis, [float(operating_temperature_f), anchor_temperature_f])))
 
     # Use a normalized coordinate along the envelope path.
@@ -906,14 +906,7 @@ def prepare_series_payload(pressure_values, cce_simulated, dl_simulated, bubble_
 
 def make_interpretation(bubble_point_pressure, rmse_value, first_volume, last_volume, cce_rmse=None, dl_rmse=None, reservoir_temp=None):
     """
-    Generate a comprehensive five-section interpretation for the results.
-    
-    Sections:
-    1. Behavior of Reservoir Fluids with Pressure Changes
-    2. Accuracy of EOS Matching
-    3. Regression Parameter Analysis
-    4. Phase Envelope Analysis
-    5. Engineering Implications
+    Generate a regression analysis interpretation based on results and inputs.
     """
     
     if cce_rmse is None:
@@ -923,94 +916,59 @@ def make_interpretation(bubble_point_pressure, rmse_value, first_volume, last_vo
     if reservoir_temp is None:
         reservoir_temp = 220.0
     
-    # Section 1: Fluid Behavior
-    section_1 = (
-        f"**1. Behavior of Reservoir Fluids with Pressure Changes**\n\n"
-        f"The PVT simulation results demonstrate the expected behavior of a black oil reservoir fluid under pressure depletion "
-        f"at a reservoir temperature of {reservoir_temp:.0f}°F. Above the bubble point pressure of {bubble_point_pressure:.1f} psig, "
-        f"the fluid exists as a single-phase undersaturated oil. In this region, the CCE relative volume decreases slightly with "
-        f"increasing pressure, reflecting the low but finite compressibility of liquid oil. "
-        f"\n\nBelow the bubble point, gas begins to evolve from solution, causing a rapid and nonlinear increase in relative volume. "
-        f"Simultaneously, the Differential Liberation results show that the oil volume factor (Bo) decreases steadily as dissolved gas "
-        f"is progressively released. Solution GOR also decreases with pressure decline, confirming progressive gas liberation at depletion. "
-        f"Oil density increases as the lighter hydrocarbon components leave the liquid phase."
-    )
-    
-    # Section 2: EOS Accuracy
+    # Regression Analysis Assessment
     if cce_rmse < 0.05:
-        accuracy_assessment = (
-            "excellent, with errors in both single-phase and two-phase regions remaining very small. "
-            "The EOS model accurately describes both the compressibility behavior of undersaturated oil "
-            "and the volumetric changes in the two-phase region."
+        quality = "Excellent"
+        assessment = (
+            f"The regression analysis achieved excellent accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
+            f"The EOS model accurately captures the fluid behavior across both single-phase (above {bubble_point_pressure:.1f} psig) "
+            f"and two-phase regions. The regression variables are well-tuned and the model is suitable for reservoir simulation and "
+            f"production forecasting."
         )
-        recommendation = "The current EOS fit is suitable for reservoir simulation and engineering analysis."
     elif cce_rmse < 0.15:
-        accuracy_assessment = (
-            "good above the bubble point, with small errors in the single-phase region. However, "
-            "below the bubble point, some deviations appear, particularly at lower pressures."
+        quality = "Good"
+        assessment = (
+            f"The regression analysis achieved good accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
+            f"The model performs well in the single-phase region above the bubble point ({bubble_point_pressure:.1f} psig) but shows "
+            f"some deviations in the two-phase region below bubble point. To improve the fit, consider: (1) including C7+ Omega and "
+            f"volume shift parameters as regression variables, (2) using finer component grouping for intermediate hydrocarbons, "
+            f"(3) increasing maximum regression iterations to 50+, and (4) weighting sub-bubble-point observations more heavily."
         )
-        recommendation = (
-            "To improve the EOS match, consider: (1) adding Omega A and Omega B for C7+ as regression variables, "
-            "(2) including volume shift parameters, (3) separating intermediate components into finer regression groups, "
-            "(4) increasing the maximum regression iterations to at least 50, and (5) ensuring all sub-bubble-point "
-            "observations are properly weighted."
+    elif cce_rmse < 0.30:
+        quality = "Moderate"
+        assessment = (
+            f"The regression analysis shows moderate accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
+            f"Significant deviations are present, especially below the bubble point ({bubble_point_pressure:.1f} psig). "
+            f"The regression configuration needs refinement: expand the set of regression variables to include C7+ properties, "
+            f"volume shift parameters, and intermediate hydrocarbon components. Increase iteration limits and implement more aggressive "
+            f"variable grouping strategies."
         )
     else:
-        accuracy_assessment = (
-            "moderate to poor, particularly below the bubble point. The EOS model overestimates or underestimates "
-            "the volumetric expansion in the two-phase region, indicating limitations in the regression variables used."
+        quality = "Poor"
+        assessment = (
+            f"The regression analysis shows poor accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
+            f"The current regression configuration is insufficient for accurate fluid modeling. Consider: (1) significantly expanding "
+            f"the regression parameter set with C7+ Omega A, Omega B, and volume shift, (2) including all intermediate hydrocarbons as "
+            f"separate regression groups, (3) using 100+ iterations, and (4) implementing aggressive weighting for regions of interest, "
+            f"particularly around the bubble point at {bubble_point_pressure:.1f} psig."
         )
-        recommendation = (
-            "Significant EOS refinement is needed. The C7+ component, which constitutes a major fraction of the fluid, "
-            "heavily governs two-phase behavior, and its Omega A, Omega B, and volume shift parameters should be included "
-            "in the regression. Additionally, increase regression iterations and use finer component grouping."
-        )
     
-    section_2 = (
-        f"**2. Accuracy of EOS Matching**\n\n"
-        f"The EOS was used to model the fluid system. The CCE match is {accuracy_assessment} "
-        f"The overall CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f} indicate the level of deviation. "
-        f"\n\n{recommendation}"
+    interpretation = (
+        f"**Regression Analysis**\n\n"
+        f"**Quality Assessment: {quality}**\n\n"
+        f"{assessment}\n\n"
+        f"**Input Parameters:**\n"
+        f"- Reservoir Temperature: {reservoir_temp:.1f}°F\n"
+        f"- Bubble Point Pressure: {bubble_point_pressure:.1f} psig\n"
+        f"- CCE RMSE: {cce_rmse:.4f}\n"
+        f"- DL RMSE: {dl_rmse:.4f}\n\n"
+        f"**Fingerprint Analysis:**\n"
+        f"The Fingerprint Plot shows the convergence of normalized CCE and DL values. If the curves remain close throughout the "
+        f"pressure range, the regression has captured the fluid behavior effectively. Divergence at lower pressures indicates that "
+        f"additional regression variables or iterations may be needed to improve deep depletion accuracy."
     )
     
-    # Section 3: Regression Parameter Analysis
-    section_3 = (
-        f"**3. Regression Parameter Analysis**\n\n"
-        f"The regression used a configuration that balances computational efficiency with flexibility. "
-        f"The Fingerprint Plot provides insight into regression quality: "
-        f"if the normalized CCE and DL curves converge well near the bubble point but diverge at lower pressures, "
-        f"this confirms that the EOS captures near-bubble-point behavior adequately but struggles with deep depletion conditions. "
-        f"Conversely, if curves remain close throughout the depletion range, the regression variables are well-tuned. "
-        f"Consider re-grouping variables and increasing iterations if the current match is unsatisfactory."
-    )
-    
-    # Section 4: Phase Envelope Analysis
-    section_4 = (
-        f"**4. Phase Envelope Analysis**\n\n"
-        f"The Phase Envelope P-T diagram shows the two-phase boundary of the reservoir fluid. "
-        f"The operating point at {reservoir_temp:.0f}°F and {bubble_point_pressure:.1f} psig sits on the bubble point curve, "
-        f"confirming that the reservoir fluid is at or near saturation at initial reservoir conditions. "
-        f"The location and shape of the envelope indicate whether the fluid behaves as a black oil (bubble point below cricondenbar) "
-        f"or a gas condensate (retrograde behavior visible). The reservoir temperature relative to the Cricondentherm provides "
-        f"insights into the dominant recovery mechanism during depletion."
-    )
-    
-    # Section 5: Engineering Implications
-    section_5 = (
-        f"**5. Engineering Implications**\n\n"
-        f"The bubble point pressure of {bubble_point_pressure:.1f} psig serves as a critical threshold for reservoir management. "
-        f"Producing below this pressure causes gas to evolve in the reservoir, reducing oil relative permeability and potentially "
-        f"leading to early gas breakthrough. Maintaining reservoir pressure above the bubble point through pressure support mechanisms "
-        f"(e.g., water injection, gas injection) can maximize oil recovery. "
-        f"\n\nThe declining Bo and GOR with decreasing pressure indicate that significant energy is stored in the dissolved gas, "
-        f"which can drive production naturally during primary depletion. However, the increasing oil density at lower pressures means "
-        f"the oil becomes heavier and more viscous as it loses lighter components, which will reduce production rates over time. "
-        f"\n\nThe current EOS RMSE values provide a baseline for simulation confidence. Further refinement of the EOS will increase "
-        f"reliability for predicting reservoir performance under various depletion scenarios."
-    )
-    
-    # Combine all sections
-    return f"{section_1}\n\n{section_2}\n\n{section_3}\n\n{section_4}\n\n{section_5}"
+    return interpretation
 
 
 @app.route("/")

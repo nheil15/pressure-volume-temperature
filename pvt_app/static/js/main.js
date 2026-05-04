@@ -1066,48 +1066,64 @@ function initializeCharts() {
         const fingerprintDlSimulated = normalizeSeriesToBubblePoint(resultData.fingerprint.pressure, resultData.fingerprint.dlSimulated, fingerprintBubblePressure);
         const fingerprintIndex = fingerprintCceExperimental.map((value, index) => (value + fingerprintDlExperimental[index]) / 2.0);
 
-        renderApexChart({
-            containerId: 'fingerprintChart',
+        // Fingerprint plot using Plotly
+        const fingerprintTraces = [
+            {
+                x: resultData.fingerprint.pressure,
+                y: fingerprintCceExperimental,
+                name: 'CCE Experimental (Normalized)',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#0d6efd', width: 2.2 },
+            },
+            {
+                x: resultData.fingerprint.pressure,
+                y: fingerprintCceSimulated,
+                name: 'CCE Simulated (Normalized)',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#2f6df6', width: 2.2, dash: 'dash' },
+            },
+            {
+                x: resultData.fingerprint.pressure,
+                y: fingerprintDlExperimental,
+                name: 'DL Experimental (Normalized)',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#198754', width: 2.2 },
+            },
+            {
+                x: resultData.fingerprint.pressure,
+                y: fingerprintDlSimulated,
+                name: 'DL Simulated (Normalized)',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#20a968', width: 2.2, dash: 'dash' },
+            },
+            {
+                x: resultData.fingerprint.pressure,
+                y: fingerprintIndex,
+                name: 'Fingerprint Index',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#6c757d', width: 2.2, dash: 'dot' },
+            },
+        ];
+
+        const fingerprintLayout = {
             title: 'Fingerprint Plot',
-            yAxisTitle: 'Normalized Value',
-            xAxisTitle: 'Pressure (psig)',
-            bubbleMarker: { value: bubblePoint, label: 'Bubble Point' },
-            curve: 'straight',
-            xaxisMin: Math.min(...resultData.fingerprint.pressure),
-            xaxisMax: Math.max(...resultData.fingerprint.pressure),
-            yaxisDecimals: 3,
-            xaxisDecimals: 1,
-            seriesConfigs: [
-                {
-                    name: 'CCE Experimental (Normalized)',
-                    data: createPoints(resultData.fingerprint.pressure, fingerprintCceExperimental),
-                    color: '#0d6efd',
-                },
-                {
-                    name: 'CCE Simulated (Normalized)',
-                    data: createPoints(resultData.fingerprint.pressure, fingerprintCceSimulated),
-                    color: '#2f6df6',
-                    dashArray: 5,
-                },
-                {
-                    name: 'DL Experimental (Normalized)',
-                    data: createPoints(resultData.fingerprint.pressure, fingerprintDlExperimental),
-                    color: '#198754',
-                },
-                {
-                    name: 'DL Simulated (Normalized)',
-                    data: createPoints(resultData.fingerprint.pressure, fingerprintDlSimulated),
-                    color: '#20a968',
-                    dashArray: 5,
-                },
-                {
-                    name: 'Fingerprint Index',
-                    data: createPoints(resultData.fingerprint.pressure, fingerprintIndex),
-                    color: '#6c757d',
-                    dashArray: 6,
-                },
-            ],
-        });
+            xaxis: {
+                title: 'Pressure (psig)',
+            },
+            yaxis: {
+                title: 'Normalized Value',
+            },
+            hovermode: 'x unified',
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+
+        Plotly.newPlot('fingerprintChart', fingerprintTraces, fingerprintLayout, { responsive: true });
     }
 
     if (resultData.phaseEnvelope) {
@@ -1115,91 +1131,82 @@ function initializeCharts() {
         const operatingPointTemperature = 220;
         const operatingPointPressure = 2516.7;
 
-        const phasePoints = [
+        // Phase envelope plot using Plotly
+        const phaseTraces = [
             {
-                x: Number(resultData.phaseEnvelope.cricondenbarTemperature),
-                y: Number(resultData.phaseEnvelope.cricondenbarPressure),
-                marker: {
-                    size: 9,
-                    fillColor: '#8b5cf6',
-                    strokeColor: '#ffffff',
-                    strokeWidth: 2,
-                },
-                label: {
-                    text: 'Cricondenbar',
-                    style: {
-                        background: '#8b5cf6',
-                        color: '#ffffff',
-                    },
-                },
+                x: resultData.phaseEnvelope.temperature,
+                y: resultData.phaseEnvelope.bubblePressure,
+                name: 'Bubble Point Curve',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#dc3545', width: 2.2 },
             },
             {
-                x: Number(resultData.phaseEnvelope.cricondenthermTemperature),
-                y: Number(resultData.phaseEnvelope.cricondenthermPressure),
-                marker: {
-                    size: 9,
-                    fillColor: '#0f766e',
-                    strokeColor: '#ffffff',
-                    strokeWidth: 2,
-                },
-                label: {
-                    text: 'Cricondentherm',
-                    style: {
-                        background: '#0f766e',
-                        color: '#ffffff',
-                    },
-                },
+                x: resultData.phaseEnvelope.temperature,
+                y: resultData.phaseEnvelope.dewPressure,
+                name: 'Dew Point Curve',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#fd7e14', width: 2.2 },
+            },
+            {
+                x: [operatingPointTemperature],
+                y: [operatingPointPressure],
+                name: 'Operating Point (220°F, 2,516.7 psig)',
+                type: 'scatter',
+                mode: 'markers',
+                marker: { size: 10, color: '#212529', symbol: 'circle' },
+            },
+            {
+                x: [Number(resultData.phaseEnvelope.cricondenbarTemperature)],
+                y: [Number(resultData.phaseEnvelope.cricondenbarPressure)],
+                name: 'Cricondenbar',
+                type: 'scatter',
+                mode: 'markers',
+                marker: { size: 10, color: '#8b5cf6', symbol: 'circle' },
+            },
+            {
+                x: [Number(resultData.phaseEnvelope.cricondenthermTemperature)],
+                y: [Number(resultData.phaseEnvelope.cricondenthermPressure)],
+                name: 'Cricondentherm',
+                type: 'scatter',
+                mode: 'markers',
+                marker: { size: 10, color: '#0f766e', symbol: 'circle' },
             },
         ];
 
-        renderApexChart({
-            containerId: 'phaseEnvelopeChart',
+        const phaseLayout = {
             title: 'Phase Envelope (P-T)',
-            yAxisTitle: 'Pressure (psig)',
-            xAxisTitle: 'Temperature (°F)',
-            xaxisMin: Math.min(...resultData.phaseEnvelope.temperature),
-            xaxisMax: Math.max(...resultData.phaseEnvelope.temperature) + 20,
-            xaxisDecimals: 1,
-            yaxisDecimals: 1,
-            xaxisAnnotations: [
+            xaxis: {
+                title: 'Temperature (°F)',
+                zeroline: false,
+            },
+            yaxis: {
+                title: 'Pressure (psig)',
+                zeroline: false,
+            },
+            hovermode: 'closest',
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+            shapes: [
                 {
-                    x: operatingPointTemperature,
-                    strokeDashArray: 0,
-                    borderColor: '#212529',
-                    label: {
-                        borderColor: '#212529',
-                        style: {
-                            color: '#fff',
-                            background: '#212529',
-                        },
-                        text: '220°F',
+                    type: 'line',
+                    x0: operatingPointTemperature,
+                    y0: Math.min(...resultData.phaseEnvelope.bubblePressure),
+                    x1: operatingPointTemperature,
+                    y1: Math.max(...resultData.phaseEnvelope.dewPressure),
+                    line: {
+                        color: '#212529',
+                        width: 1,
+                        dash: 'dash',
                     },
                 },
             ],
-            seriesConfigs: [
-                {
-                    name: 'Operating Point (220°F, 2,516.7 psig)',
-                    type: 'scatter',
-                    data: [{ x: operatingPointTemperature, y: operatingPointPressure }],
-                    color: '#212529',
-                    markerSize: 8,
-                    markerShape: 'circle',
-                    showLine: false,
-                },
-                {
-                    name: 'Bubble Point Curve',
-                    data: createPoints(resultData.phaseEnvelope.temperature, resultData.phaseEnvelope.bubblePressure),
-                    color: '#dc3545',
-                },
-                {
-                    name: 'Dew Point Curve',
-                    data: createPoints(resultData.phaseEnvelope.temperature, resultData.phaseEnvelope.dewPressure),
-                    color: '#fd7e14',
-                },
-            ],
-            pointAnnotations: phasePoints,
-        });
+        };
+
+        Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
     }
+
 }
 
 // ===== Form Validation =====
