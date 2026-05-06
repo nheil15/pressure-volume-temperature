@@ -22,6 +22,7 @@ function initializeTableManagement() {
     const compositionConvertBtn = document.getElementById('composition_convert_btn');
     const cceConvertBtn = document.getElementById('cce_convert_btn');
     const dlConvertBtn = document.getElementById('dl_convert_btn');
+    const detectedPressureRange = document.getElementById('detected_pressure_range');
 
     const dlPropertyDefinitions = {
         solution_gor: {
@@ -167,6 +168,37 @@ function initializeTableManagement() {
         return Array.from(activeDlPropertyKeys);
     }
 
+    function getDetectedCcePressureRange() {
+        if (!cceTable) {
+            return null;
+        }
+
+        const pressures = Array.from(cceTable.querySelectorAll('tbody tr')).map((row) => {
+            const input = row.querySelector('td:first-child input[type="number"]');
+            return input ? Number.parseFloat(input.value) : Number.NaN;
+        }).filter((value) => Number.isFinite(value));
+
+        if (pressures.length === 0) {
+            return null;
+        }
+
+        return {
+            minimum: Math.min(...pressures),
+            maximum: Math.max(...pressures),
+        };
+    }
+
+    function updateDetectedPressureRangeDisplay() {
+        if (!detectedPressureRange) {
+            return;
+        }
+
+        const range = getDetectedCcePressureRange();
+        detectedPressureRange.textContent = range
+            ? `${range.minimum.toFixed(1)} - ${range.maximum.toFixed(1)} psig`
+            : '--';
+    }
+
     function addRowToTable(tableId) {
         const table = document.getElementById(tableId);
         const tbody = table.querySelector('tbody');
@@ -206,6 +238,10 @@ function initializeTableManagement() {
         }
 
         tbody.appendChild(newRow);
+
+        if (tableId === 'cce_table') {
+            updateDetectedPressureRangeDisplay();
+        }
     }
 
     function compositionTableToCSV() {
@@ -248,6 +284,10 @@ function initializeTableManagement() {
         const tbody = table?.querySelector('tbody');
         if (tbody) {
             tbody.innerHTML = '';
+        }
+
+        if (tableId === 'cce_table') {
+            updateDetectedPressureRangeDisplay();
         }
     }
 
@@ -440,6 +480,8 @@ function initializeTableManagement() {
             tbody.appendChild(row);
             inserted++;
         });
+
+        updateDetectedPressureRangeDisplay();
 
         return inserted;
     }
@@ -741,8 +783,20 @@ function initializeTableManagement() {
 
             const row = deleteButton.closest('tr');
             row?.remove();
+
+            if (table.id === 'cce_table') {
+                updateDetectedPressureRangeDisplay();
+            }
         });
     });
+
+    cceTable?.addEventListener('input', updateDetectedPressureRangeDisplay);
+    cceTable?.addEventListener('change', updateDetectedPressureRangeDisplay);
+
+    if (cceTable && typeof MutationObserver !== 'undefined') {
+        const observer = new MutationObserver(() => updateDetectedPressureRangeDisplay());
+        observer.observe(cceTable.querySelector('tbody') || cceTable, { childList: true, subtree: true });
+    }
 
     dlPropertyOptions.forEach((chip) => {
         setPropertyChipState(chip, false);
@@ -761,6 +815,8 @@ function initializeTableManagement() {
     document.querySelectorAll('.dl-bubble-radio').forEach(radio => {
         setupBubblePointToggle(radio, 'dl_table');
     });
+
+    updateDetectedPressureRangeDisplay();
 
     activeDlPropertyKeys.clear();
     addDlPropertyColumns(getDlPropertyKeysFromHeader());
@@ -812,6 +868,7 @@ function initializeCharts() {
         : {
             reservoirTemperature: rawResultData.reservoir_temperature,
             bubblePointPressure: rawResultData.bubble_point_pressure,
+            submitted_inputs: rawResultData.submitted_inputs || {},
             cce: rawResultData.cce,
             dl: rawResultData.dl,
             ternaryPlots: rawResultData.ternary_plots || [],
@@ -1161,9 +1218,9 @@ function initializeCharts() {
     }
 
     if (resultData.phaseEnvelope) {
-        // Hard-anchor the operating point to the exact lab coordinate.
-        const operatingPointTemperature = 220;
-        const operatingPointPressure = 2516.7;
+        // Use actual reservoir temperature and bubble point from user input.
+        const operatingPointTemperature = Number(resultData.submitted_inputs?.reservoir_temperature || resultData.reservoir_temperature || 220);
+        const operatingPointPressure = Number(resultData.bubble_point_pressure || 2516.7);
 
         // Bubble point graph using Plotly
         const bubblePointTraces = [
@@ -1218,7 +1275,7 @@ function initializeCharts() {
             {
                 x: [operatingPointTemperature],
                 y: [operatingPointPressure],
-                name: 'Operating Point (220°F, 2,516.7 psig)',
+                name: `Operating Point (${operatingPointTemperature.toFixed(1)}°F, ${operatingPointPressure.toFixed(1)} psig)`,
                 type: 'scatter',
                 mode: 'markers',
                 marker: { size: 10, color: '#212529', symbol: 'circle' },
@@ -1276,7 +1333,8 @@ function initializeCharts() {
     // ===== TERNARY PLOTS (Figures 3-5) =====
     if (resultData.ternaryPlots && resultData.ternaryPlots.length >= 3) {
         const ternaryChartIds = ['ternaryChart1', 'ternaryChart2', 'ternaryChart3'];
-        const ternaryPressures = [2000, 4000, 6000];
+        const ternarySubtitleIds = ['ternarySubtitle1', 'ternarySubtitle2', 'ternarySubtitle3'];
+        const ternarySaveIds = ['ternarySave1', 'ternarySave2', 'ternarySave3'];
 
         function normalizeTernaryPoint(a, b, c) {
             const values = [Math.max(a, 0), Math.max(b, 0), Math.max(c, 0)];
@@ -1286,9 +1344,23 @@ function initializeCharts() {
         
         for (let i = 0; i < 3; i++) {
             const ternaryData = resultData.ternaryPlots[i];
+            const ternaryPressure = Number(ternaryData.pressure);
+            const ternaryTemperature = Number(ternaryData.temperature);
             const aValue = ternaryData.co2_n2 * 100;
             const bValue = ternaryData.light_hc * 100;
             const cValue = ternaryData.heavy_hc * 100;
+
+            const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
+            if (subtitleNode) {
+                subtitleNode.textContent = Number.isFinite(ternaryPressure)
+                    ? `Ternary Plot at ${ternaryPressure.toFixed(1)} psi`
+                    : 'Ternary Plot';
+            }
+
+            const saveButton = document.getElementById(ternarySaveIds[i]);
+            if (saveButton && Number.isFinite(ternaryPressure)) {
+                saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_${ternaryPressure.toFixed(0)}psi')`);
+            }
 
             const shadedVertices = [
                 normalizeTernaryPoint(aValue + 7, bValue - 3.5, cValue - 3.5),
@@ -1330,25 +1402,36 @@ function initializeCharts() {
                 hovertemplate: '%{text}<extra></extra>',
                 name: 'Composition'
             };
+
+            // Set an initial zoom window around the composition/shaded region
+            // so the plot starts clear and readable without over-zooming.
+            const focusPoints = [...shadedVertices, [aValue, bValue, cValue]];
+            const padding = 5;
+            const minA = Math.max(0, Math.min(...focusPoints.map((point) => point[0])) - padding);
+            const minB = Math.max(0, Math.min(...focusPoints.map((point) => point[1])) - padding);
+            const minC = Math.max(0, Math.min(...focusPoints.map((point) => point[2])) - padding);
             
             const ternaryLayout = {
-                title: `Ternary Plot (T=220°F, P=${ternaryPressures[i]} psi)`,
+                title: `Ternary Plot (T=${Number.isFinite(ternaryTemperature) ? ternaryTemperature.toFixed(1) : 'N/A'}°F, P=${Number.isFinite(ternaryPressure) ? ternaryPressure.toFixed(1) : 'N/A'} psi)`,
                 ternary: {
                     sum: 100,
                     aaxis: {
                         title: 'CO₂/N₂ (%)',
+                        min: minA,
                         tickfont: { size: 12 },
                         showline: true,
                         showgrid: true,
                     },
                     baxis: {
                         title: 'Light HC: C1-C3 (%)',
+                        min: minB,
                         tickfont: { size: 12 },
                         showline: true,
                         showgrid: true,
                     },
                     caxis: {
                         title: 'Heavy HC: C4+ (%)',
+                        min: minC,
                         tickfont: { size: 12 },
                         showline: true,
                         showgrid: true,
@@ -1428,7 +1511,7 @@ function initializeCharts() {
         const gorLayout = {
             title: 'DL Gas-Oil Ratio vs Pressure',
             xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'GOR (scf/stb)' },
+            yaxis: { title: 'GOR (Mscf/stb)', autorange: true },
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
@@ -1491,7 +1574,18 @@ function initializeCharts() {
         const gasGravityLayout = {
             title: 'DL Gas Gravity vs Pressure',
             xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'Gas Gravity (relative to air)' },
+            yaxis: (() => {
+                const values = props.gas_gravity.filter((value) => Number.isFinite(Number(value)));
+                const minValue = values.length ? Math.min(...values) : 0;
+                const maxValue = values.length ? Math.max(...values) : 1;
+                const span = Math.max(maxValue - minValue, 0.05);
+                const padding = span * 0.2;
+                return {
+                    title: 'Gas Gravity (relative to air)',
+                    range: [Math.max(0, minValue - padding), maxValue + padding],
+                    fixedrange: false,
+                };
+            })(),
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
@@ -1525,20 +1619,10 @@ function initializeCharts() {
 function validateFormInput() {
     const errors = [];
     const temperature = document.getElementById('reservoir_temperature').value.trim();
-    const pressureMin = document.getElementById('pressure_min').value.trim();
-    const pressureMax = document.getElementById('pressure_max').value.trim();
 
     // Validate temperature
     if (!temperature) {
         errors.push('Reservoir temperature is required.');
-    }
-
-    // Validate pressure range
-    if (!pressureMin) {
-        errors.push('Minimum pressure is required.');
-    }
-    if (!pressureMax) {
-        errors.push('Maximum pressure is required.');
     }
     // Validate data tables
     const compositionStatus = getCompositionRowStatus();

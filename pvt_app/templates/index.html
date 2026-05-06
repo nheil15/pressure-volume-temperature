@@ -59,20 +59,6 @@
                             <label for="reservoir_temperature" class="form-label">Reservoir Temperature (°F)</label>
                             <input type="number" step="0.1" class="form-control" id="reservoir_temperature" name="reservoir_temperature" placeholder="e.g. 180">
                         </div>
-
-                        <div class="col-md-2">
-                            <label for="pressure_min" class="form-label">Min Pressure</label>
-                            <input type="number" step="0.1" class="form-control" id="pressure_min" name="pressure_min" placeholder="2000">
-                        </div>
-
-                        <div class="col-md-2">
-                            <label for="pressure_max" class="form-label">Max Pressure</label>
-                            <input type="number" step="0.1" class="form-control" id="pressure_max" name="pressure_max" placeholder="5000">
-                        </div>
-                    </div>
-
-                    <div class="alert alert-light border small mb-0">
-                        Manual format: each line should contain <strong>pressure, value</strong>. For CSV files, include a pressure column and a value column.
                     </div>
 
                     <div class="row g-4">
@@ -146,6 +132,10 @@
                                 <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" id="cce_convert_btn">Convert</button>
                             </div>
                             <textarea class="form-control d-none" id="cce_data" name="cce_data" rows="5"></textarea>
+                            <div class="alert alert-light border small mt-3 mb-0">
+                                <span class="text-muted">Detected CCE pressure range:</span>
+                                <strong id="detected_pressure_range" class="ms-1">--</strong>
+                            </div>
                         </div>
 
                         <div class="col-12">

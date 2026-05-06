@@ -89,10 +89,54 @@ def parse_pressure_range(raw_min, raw_max, raw_step):
     return minimum, maximum, step
 
 
+def select_ternary_pressures(measurement_pressures, minimum_pressure, maximum_pressure):
+    """Select three representative ternary pressures from submitted pressure context."""
+    min_p = float(minimum_pressure)
+    max_p = float(maximum_pressure)
+    if min_p > max_p:
+        min_p, max_p = max_p, min_p
+
+    targets = [min_p, (min_p + max_p) / 2.0, max_p]
+
+    try:
+        pressures = np.asarray(measurement_pressures, dtype=float)
+        pressures = pressures[np.isfinite(pressures)]
+    except Exception:
+        pressures = np.array([], dtype=float)
+
+    if pressures.size == 0:
+        return [round(float(value), 2) for value in targets]
+
+    available = np.unique(np.round(pressures, 2))
+    selected = []
+
+    def add_unique(value):
+        if not any(abs(value - existing) < 1e-6 for existing in selected):
+            selected.append(float(value))
+
+    # Prefer points nearest to min/mid/max of submitted range.
+    for target in targets:
+        nearest = float(available[np.abs(available - target).argmin()])
+        add_unique(nearest)
+
+    # Ensure we always return exactly three values.
+    fallback_candidates = [float(available.min()), float(np.median(available)), float(available.max())]
+    for candidate in fallback_candidates:
+        if len(selected) >= 3:
+            break
+        add_unique(candidate)
+
+    while len(selected) < 3:
+        add_unique(float(targets[len(selected)]))
+
+    selected = sorted(selected[:3])
+    return [round(value, 2) for value in selected]
+
+
 def parse_numeric_field(raw_value, fallback):
     """Parse a numeric form field while tolerating units, commas, and whitespace."""
     if raw_value in (None, ""):
-        return float(fallback)
+        return None if fallback is None else float(fallback)
 
     text = str(raw_value).strip()
     if not text:
@@ -105,7 +149,7 @@ def parse_numeric_field(raw_value, fallback):
     try:
         return float(cleaned)
     except (TypeError, ValueError):
-        return float(fallback)
+        return None if fallback is None else float(fallback)
 
 
 def parse_manual_data(raw_text, expected_value_name):
@@ -376,28 +420,26 @@ def compute_dl_bo_simulation(pressure_values, bubble_point_pressure, bo_at_pb):
 
 
 def compute_dl_properties(pressure_values, bubble_point_pressure, bo_values, reservoir_temperature_f, composition_dict=None, reference_density=None):
-    """Compute DL properties: Rs, Z, and oil density in field units (lb/ft³).
-    
-    Args:
-        reference_density: Oil density at surface (stock tank), typically ~45-56 lb/ft³ from lab data.
-                          Used to compute reservoir density via: rho_res = rho_st * bo_st / bo
-    """
+    """Compute DL properties: Rs, Z, and oil density in field units (lb/ft³)."""
+
     pressures = np.asarray(pressure_values, dtype=float)
     bo_array = np.asarray(bo_values, dtype=float)
-    pb = max(float(bubble_point_pressure), 1.0)
+
     temperature_r = float(reservoir_temperature_f) + 459.67
     temperature_k = temperature_r * 5.0 / 9.0
 
-    composition_dict = composition_dict or {}
-    stock_tank_density = float(reference_density) if reference_density and reference_density > 0 else estimate_stock_tank_density(composition_dict)
     gas_specific_gravity = estimate_gas_specific_gravity(composition_dict)
     gas_density_std = 0.0764 * gas_specific_gravity
     rs_pb = estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature_f, bubble_point_pressure)
     mixture_props = calculate_mixture_properties_pr(composition_dict, temperature_k) if composition_dict else None
 
+    stock_tank_density = float(reference_density) if reference_density is not None else estimate_stock_tank_density(composition_dict)
+
     rs_values = []
     z_values = []
     density_values = []
+
+    pb = max(float(bubble_point_pressure), 1.0)
 
     for pressure, bo in zip(pressures, bo_array):
         if pressure >= pb:
@@ -409,8 +451,6 @@ def compute_dl_properties(pressure_values, bubble_point_pressure, bo_values, res
         z = 0.79 + 0.08 * (temperature_r / 680.0) - 0.028 * (p_abs / 3000.0)
         z = float(np.clip(z, 0.74, 1.02))
 
-        # Compute reservoir oil density from a material-balance style relationship.
-        # rho_res (lb/ft³) = (rho_st + Rs * rho_g,std / 5.615) / Bo
         bo_safe = max(float(bo), 0.5)
         rho_res = (stock_tank_density + rs * gas_density_std / 5.615) / bo_safe
 
@@ -1095,12 +1135,65 @@ def compute_molar_distribution(composition_dict, k_values_liquid_phase, k_values
 
 
 def generate_ternary_plot_data(composition_dict, pressure_psia, temperature_f, bubble_point_pressure):
-    """Generate ternary diagram data for the three major component groups."""
+    """Generate pressure-sensitive ternary data for the three major component groups."""
+    if not composition_dict:
+        return {
+            "co2_n2": 0.0,
+            "light_hc": 0.0,
+            "heavy_hc": 0.0,
+            "pressure": round(float(pressure_psia), 2),
+            "temperature": round(float(temperature_f), 1),
+        }
+
+    pressure_value = max(float(pressure_psia), 1.0)
+    bubble_point = max(float(bubble_point_pressure), 1.0)
+
+    # Normalize feed composition defensively.
+    positive_total = sum(max(float(value), 0.0) for value in composition_dict.values())
+    if positive_total <= 0:
+        positive_total = 1.0
+    feed_comp = {
+        component: max(float(value), 0.0) / positive_total
+        for component, value in composition_dict.items()
+    }
+
+    # Estimate vapor-phase enrichment from K-values at this pressure.
+    k_values = calculate_k_values(feed_comp, pressure_value, temperature_f)
+    y_unnormalized = {
+        component: feed_comp.get(component, 0.0) * k_values.get(component, 1.0)
+        for component in feed_comp
+    }
+    y_total = sum(y_unnormalized.values())
+    if y_total <= 0:
+        y_total = 1.0
+    vapor_comp = {component: value / y_total for component, value in y_unnormalized.items()}
+
+    # Blend feed and vapor composition based on pressure relative to bubble point:
+    # below Pb -> stronger vapor-like composition shift, above Pb -> mostly feed-like.
+    pressure_ratio = np.clip(pressure_value / bubble_point, 0.2, 2.5)
+    vapor_weight = 0.9 - 0.6 * np.clip((pressure_ratio - 0.2) / 1.0, 0.0, 1.0)
+    vapor_weight = float(np.clip(vapor_weight, 0.25, 0.9))
+
+    effective_comp = {
+        component: (1.0 - vapor_weight) * feed_comp.get(component, 0.0) + vapor_weight * vapor_comp.get(component, 0.0)
+        for component in feed_comp
+    }
+
     # Group components: CO2/N2, Light HC (C1-C3), Heavy HC (C4+)
-    co2_n2 = composition_dict.get("co2", 0.0) + composition_dict.get("n2", 0.0)
-    light_hc = (composition_dict.get("c1", 0.0) + composition_dict.get("c2", 0.0) + composition_dict.get("c3", 0.0))
-    heavy_hc = 1.0 - co2_n2 - light_hc
-    heavy_hc = max(0.0, min(1.0, heavy_hc))
+    co2_n2 = effective_comp.get("co2", 0.0) + effective_comp.get("n2", 0.0)
+    light_hc = (
+        effective_comp.get("c1", 0.0)
+        + effective_comp.get("c2", 0.0)
+        + effective_comp.get("c3", 0.0)
+    )
+    heavy_hc = max(0.0, 1.0 - co2_n2 - light_hc)
+
+    grouped_total = co2_n2 + light_hc + heavy_hc
+    if grouped_total <= 0:
+        grouped_total = 1.0
+    co2_n2 /= grouped_total
+    light_hc /= grouped_total
+    heavy_hc /= grouped_total
     
     return {
         "co2_n2": round(float(co2_n2), 4),
@@ -1295,16 +1388,17 @@ def index():
 @app.route("/analyze", methods=["POST"])
 def analyze():
     """Process the submitted data and store the results in the session."""
-    reservoir_temperature = parse_numeric_field(request.form.get("reservoir_temperature", 180), 180.0)
-    pressure_min = parse_numeric_field(request.form.get("pressure_min", 2000), 2000.0)
-    pressure_max = parse_numeric_field(request.form.get("pressure_max", 5000), 5000.0)
+    # Parse user inputs without imposing hard defaults; compute from data when missing
+    reservoir_temperature = parse_numeric_field(request.form.get("reservoir_temperature", None), None)
+    pressure_min = parse_numeric_field(request.form.get("pressure_min", None), None)
+    pressure_max = parse_numeric_field(request.form.get("pressure_max", None), None)
     composition_data = request.form.get("composition_data", "")
     cce_raw_csv = request.form.get("cce_data", "")
     dl_raw_csv = request.form.get("dl_data", "")
     explicit_sat_pressure = request.form.get("saturation_pressure", "")
 
-    minimum_pressure = min(pressure_min, pressure_max)
-    maximum_pressure = max(pressure_min, pressure_max)
+    minimum_pressure = None
+    maximum_pressure = None
     composition_dict = parse_composition_data(composition_data)
 
     cce_fallback = [
@@ -1346,12 +1440,44 @@ def analyze():
         ),
         dtype=float,
     )
+
+    finite_meas = combined_measurement_pressures[np.isfinite(combined_measurement_pressures)]
+    data_min = float(np.min(finite_meas)) if finite_meas.size > 0 else None
+    data_max = float(np.max(finite_meas)) if finite_meas.size > 0 else None
+
     bubble_point_pressure = resolve_bubble_point_pressure(explicit_sat_pressure, cce_raw_csv, dl_raw_csv, combined_measurement_pressures)
+
+    # Determine simulation pressure bounds from explicit inputs or measurement data
+    if pressure_min is None and pressure_max is None:
+        if data_min is not None:
+            minimum_pressure = data_min
+            maximum_pressure = data_max
+        else:
+            # Fallback to bubble point as lower bound if no measurement pressures provided
+            minimum_pressure = float(bubble_point_pressure)
+            maximum_pressure = float(bubble_point_pressure) + 3000.0
+    else:
+        if pressure_min is None:
+            if data_min is not None:
+                minimum_pressure = data_min
+            else:
+                minimum_pressure = float(bubble_point_pressure)
+        else:
+            minimum_pressure = float(pressure_min)
+
+        if pressure_max is None:
+            if data_max is not None:
+                maximum_pressure = data_max
+            else:
+                maximum_pressure = float(bubble_point_pressure) + 3000.0
+        else:
+            maximum_pressure = float(pressure_max)
 
     cce_pressure = cce_data["pressure"].to_numpy(dtype=float)
     cce_experimental = cce_data.iloc[:, 1].to_numpy(dtype=float)
     dl_pressure = dl_data["pressure"].to_numpy(dtype=float)
     dl_experimental = dl_data.iloc[:, 1].to_numpy(dtype=float)
+    cce_pressure_min = float(np.min(cce_pressure)) if cce_pressure.size > 0 else float(minimum_pressure)
 
     cce_sort_index = np.argsort(cce_pressure)
     dl_sort_index = np.argsort(dl_pressure)
@@ -1385,7 +1511,33 @@ def analyze():
     
     # Estimate stock-tank density from the submitted composition instead of a fixed placeholder.
     ref_density = estimate_stock_tank_density(composition_dict)
-    
+
+    # Derive reservoir temperature from submitted fields or measurement data when possible
+    if reservoir_temperature is None:
+        def _find_temperature(df):
+            if df is None or df.empty:
+                return None
+            for col in df.columns:
+                if "temp" in str(col).strip().lower() or "temperature" in str(col).strip().lower():
+                    try:
+                        arr = df[col].to_numpy(dtype=float)
+                        arr = arr[np.isfinite(arr)]
+                        if arr.size > 0:
+                            return float(np.mean(arr))
+                    except Exception:
+                        continue
+            return None
+
+        temp_from_cce = _find_temperature(cce_data)
+        temp_from_dl = _find_temperature(dl_data)
+        if temp_from_cce is not None:
+            reservoir_temperature = temp_from_cce
+        elif temp_from_dl is not None:
+            reservoir_temperature = temp_from_dl
+        else:
+            # As a last resort, fall back to coursework standard (consistent with previous behaviour)
+            reservoir_temperature = 220.0
+
     rs_simulated_axis, z_simulated_axis, density_simulated_axis = compute_dl_properties(
         fingerprint_pressure_axis,
         bubble_point_pressure,
@@ -1434,7 +1586,7 @@ def analyze():
     results_payload = {
         "reservoir_temperature": float(reservoir_temperature),
         "pressure_range": {
-            "minimum": float(minimum_pressure),
+            "minimum": float(cce_pressure_min),
             "maximum": float(maximum_pressure),
         },
         "bubble_point_pressure": bubble_point_pressure,
@@ -1442,7 +1594,7 @@ def analyze():
         "simulation_properties": simulation_properties_table,
         "submitted_inputs": {
             "reservoir_temperature": float(reservoir_temperature),
-            "pressure_min": float(minimum_pressure),
+            "pressure_min": float(cce_pressure_min),
             "pressure_max": float(maximum_pressure),
         },
         "fingerprint": {
@@ -1499,22 +1651,22 @@ def analyze():
 
     # ===== COMPREHENSIVE REPORT DATA =====
     
-    # Generate ternary plot data at specific pressures (T=220°F)
-    ternary_pressures = [2000.0, 4000.0, 6000.0]
+    # Generate ternary plot data using submitted pressure context.
+    ternary_pressures = select_ternary_pressures(
+        combined_measurement_pressures,
+        minimum_pressure,
+        maximum_pressure,
+    )
     ternary_data = []
     for tp in ternary_pressures:
-        ternary_data.append(generate_ternary_plot_data(composition_dict, tp, 220.0, bubble_point_pressure))
+        ternary_data.append(generate_ternary_plot_data(composition_dict, tp, reservoir_temperature, bubble_point_pressure))
     
     # Generate individual property arrays for DL1 plots
-    # Select pressure points for display (every nth point)
-    display_pressure_indices = list(range(0, len(dl_pressure), max(1, len(dl_pressure) // 8)))
-    if len(dl_pressure) - 1 not in display_pressure_indices:
-        display_pressure_indices.append(len(dl_pressure) - 1)
-    
-    display_pressures = [dl_pressure[i] for i in display_pressure_indices]
-    display_z_values = [z_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
-    display_density_values = [density_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
-    display_rs_values = [rs_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
+    # Use all DL pressure stages so plots reflect every measurement stage
+    display_pressures = list(dl_pressure)
+    display_z_values = [np.interp(p, fingerprint_pressure_axis[::-1], z_simulated_axis[::-1]) for p in display_pressures]
+    display_density_values = [np.interp(p, fingerprint_pressure_axis[::-1], density_simulated_axis[::-1]) for p in display_pressures]
+    display_rs_values = [np.interp(p, fingerprint_pressure_axis[::-1], rs_simulated_axis[::-1]) for p in display_pressures]
     
     # Compute Bg (gas FVF) values
     display_bg_values = []
@@ -1522,9 +1674,17 @@ def analyze():
         bg = (0.00502 * float(z) * (float(reservoir_temperature) + 459.67)) / (float(p) + 14.7)
         display_bg_values.append(float(bg))
     
-    # Gas gravity (estimate)
+    # Gas gravity (pressure-dependent trend; increases as pressure falls below Pb)
     gas_sg = estimate_gas_specific_gravity(composition_dict)
-    display_gas_gravity = [gas_sg + 0.01 * (p / 3000.0) for p in display_pressures]
+    display_gas_gravity = []
+    for p in display_pressures:
+        if p >= bubble_point_pressure:
+            gg = gas_sg
+        else:
+            pressure_below_pb = bubble_point_pressure - p
+            # Stronger upward trend for differential liberation: increase ~15% per 1000 psia below Pb
+            gg = gas_sg * (1.0 + 0.15 * (pressure_below_pb / 1000.0))
+        display_gas_gravity.append(float(gg))
     
     # Oil relative volume (simplified)
     display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
@@ -1544,7 +1704,7 @@ def analyze():
         "pressure": [round(p, 2) for p in display_pressures],
         "z_factor": [round(z, 4) for z in display_z_values],
         "liquid_density": [round(d, 2) for d in display_density_values],
-        "gor": [round(rs, 2) for rs in display_rs_values],
+        "gor": [round(rs, 4) for rs in display_rs_values],
         "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
         "gas_fvf": [round(bg, 6) for bg in display_bg_values],
         "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],
@@ -1588,7 +1748,7 @@ def results():
             session["pvt_results_id"] = results_id
 
     if not results_payload:
-        reservoir_temperature = 180.0
+        reservoir_temperature = 220.0
         bubble_point_pressure = 2516.7
         pressure_axis = np.array([5000.0, 4000.0, 3000.0, 2516.7, 2200.0])
         cce_experimental = np.array([0.945, 0.965, 0.985, 1.0, 1.06])
@@ -1635,11 +1795,11 @@ def results():
 
         results_payload = {
             "reservoir_temperature": reservoir_temperature,
-            "pressure_range": {"minimum": 2000.0, "maximum": 5000.0},
+            "pressure_range": {"minimum": float(pressure_axis.min()), "maximum": float(pressure_axis.max())},
             "submitted_inputs": {
                 "reservoir_temperature": reservoir_temperature,
-                "pressure_min": 2000.0,
-                "pressure_max": 5000.0,
+                "pressure_min": float(pressure_axis.min()),
+                "pressure_max": float(pressure_axis.max()),
             },
             "bubble_point_pressure": bubble_point_pressure,
             "cce": {
@@ -1677,15 +1837,13 @@ def results():
         }
         
         # ===== DEMO COMPREHENSIVE REPORT DATA =====
+        ternary_pressures_demo = select_ternary_pressures(pressure_axis, 2000.0, 5000.0)
         ternary_data = []
-        for tp in [2000.0, 4000.0, 6000.0]:
-            ternary_data.append(generate_ternary_plot_data(demo_composition, tp, 220.0, bubble_point_pressure))
+        for tp in ternary_pressures_demo:
+            ternary_data.append(generate_ternary_plot_data(demo_composition, tp, reservoir_temperature, bubble_point_pressure))
         
-        display_pressure_indices = list(range(0, len(pressure_axis), max(1, len(pressure_axis) // 8)))
-        if len(pressure_axis) - 1 not in display_pressure_indices:
-            display_pressure_indices.append(len(pressure_axis) - 1)
-        
-        display_pressures = [pressure_axis[i] for i in display_pressure_indices]
+        # Use all available demo pressure stages
+        display_pressures = list(pressure_axis)
         display_z_values = [np.interp(p, fp_pressure[::-1], z_axis[::-1]) for p in display_pressures]
         display_density_values = [np.interp(p, fp_pressure[::-1], rho_axis[::-1]) for p in display_pressures]
         display_rs_values = [np.interp(p, fp_pressure[::-1], rs_axis[::-1]) for p in display_pressures]
@@ -1696,7 +1854,14 @@ def results():
             display_bg_values.append(float(bg))
         
         gas_sg_demo = estimate_gas_specific_gravity(demo_composition)
-        display_gas_gravity = [gas_sg_demo + 0.01 * (p / 3000.0) for p in display_pressures]
+        display_gas_gravity = []
+        for p in display_pressures:
+            if p >= bubble_point_pressure:
+                gg = gas_sg_demo
+            else:
+                pressure_below_pb = bubble_point_pressure - p
+                gg = gas_sg_demo * (1.0 + 0.15 * (pressure_below_pb / 1000.0))
+            display_gas_gravity.append(float(gg))
         display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
         
         cce_table_comprehensive_demo = build_comprehensive_cce_table(
@@ -1712,7 +1877,7 @@ def results():
             "pressure": [round(p, 2) for p in display_pressures],
             "z_factor": [round(z, 4) for z in display_z_values],
             "liquid_density": [round(d, 2) for d in display_density_values],
-            "gor": [round(rs, 2) for rs in display_rs_values],
+            "gor": [round(rs, 4) for rs in display_rs_values],
             "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
             "gas_fvf": [round(bg, 6) for bg in display_bg_values],
             "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],

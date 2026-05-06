@@ -34,7 +34,7 @@
                     </div>
                     <div class="summary-stat" style="padding: 0.75rem 0; border-bottom: 1px solid #f0f0f0;">
                         <span class="summary-label" style="display: block; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">Submitted Pressure Range</span>
-                        <strong style="font-size: 1.1rem;">{{ results.submitted_inputs.pressure_min | round(1) }} - {{ results.submitted_inputs.pressure_max | round(1) }} psig</strong>
+                        <strong style="font-size: 1.1rem;">{{ results.pressure_range.minimum | round(1) }} - {{ results.pressure_range.maximum | round(1) }} psig</strong>
                     </div>
                     <div class="summary-stat" style="padding: 0.75rem 0; border-bottom: 1px solid #f0f0f0;">
                         <span class="summary-label" style="display: block; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">Bubble Point Pressure</span>
@@ -240,7 +240,7 @@
     <!-- ===== TERNARY PLOTS (Figures 3-5) ===== -->
     <div class="col-12">
         <h3 class="mb-4 text-dark fw-bold">
-            <i class="fas fa-cube me-2"></i>Ternary Diagrams (at T=220°F)
+            <i class="fas fa-cube me-2"></i>Ternary Diagrams
         </h3>
     </div>
 
@@ -250,14 +250,14 @@
                 <div class="d-flex justify-content-between align-items-start mb-3">
                     <div>
                         <h5 class="card-title text-primary mb-1">Figure 3</h5>
-                        <p class="text-muted small mb-0">Ternary Plot at 2000 psi</p>
+                        <p id="ternarySubtitle1" class="text-muted small mb-0">Ternary Plot</p>
                     </div>
-                    <button class="btn btn-sm btn-outline-primary" title="Save as PNG" onclick="savePNG('ternaryChart1', 'Ternary_2000psi')">
+                    <button id="ternarySave1" class="btn btn-sm btn-outline-primary" title="Save as PNG" onclick="savePNG('ternaryChart1', 'Ternary_Plot_1')">
                         <i class="fas fa-download"></i>
                     </button>
                 </div>
                 <div class="chart-wrap flex-grow-1">
-                    <div id="ternaryChart1" aria-label="Ternary plot 2000 psi" role="img"></div>
+                    <div id="ternaryChart1" aria-label="Ternary plot" role="img"></div>
                 </div>
             </div>
         </div>
@@ -269,14 +269,14 @@
                 <div class="d-flex justify-content-between align-items-start mb-3">
                     <div>
                         <h5 class="card-title text-info mb-1">Figure 4</h5>
-                        <p class="text-muted small mb-0">Ternary Plot at 4000 psi</p>
+                        <p id="ternarySubtitle2" class="text-muted small mb-0">Ternary Plot</p>
                     </div>
-                    <button class="btn btn-sm btn-outline-info" title="Save as PNG" onclick="savePNG('ternaryChart2', 'Ternary_4000psi')">
+                    <button id="ternarySave2" class="btn btn-sm btn-outline-info" title="Save as PNG" onclick="savePNG('ternaryChart2', 'Ternary_Plot_2')">
                         <i class="fas fa-download"></i>
                     </button>
                 </div>
                 <div class="chart-wrap flex-grow-1">
-                    <div id="ternaryChart2" aria-label="Ternary plot 4000 psi" role="img"></div>
+                    <div id="ternaryChart2" aria-label="Ternary plot" role="img"></div>
                 </div>
             </div>
         </div>
@@ -288,14 +288,14 @@
                 <div class="d-flex justify-content-between align-items-start mb-3">
                     <div>
                         <h5 class="card-title text-success mb-1">Figure 5</h5>
-                        <p class="text-muted small mb-0">Ternary Plot at 6000 psi</p>
+                        <p id="ternarySubtitle3" class="text-muted small mb-0">Ternary Plot</p>
                     </div>
-                    <button class="btn btn-sm btn-outline-success" title="Save as PNG" onclick="savePNG('ternaryChart3', 'Ternary_6000psi')">
+                    <button id="ternarySave3" class="btn btn-sm btn-outline-success" title="Save as PNG" onclick="savePNG('ternaryChart3', 'Ternary_Plot_3')">
                         <i class="fas fa-download"></i>
                     </button>
                 </div>
                 <div class="chart-wrap flex-grow-1">
-                    <div id="ternaryChart3" aria-label="Ternary plot 6000 psi" role="img"></div>
+                    <div id="ternaryChart3" aria-label="Ternary plot" role="img"></div>
                 </div>
             </div>
         </div>
