@@ -42,11 +42,11 @@
                     </div>
                     <div class="summary-stat" style="padding: 0.75rem 0; border-bottom: 1px solid #f0f0f0;">
                         <span class="summary-label" style="display: block; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">CCE RMSE</span>
-                        <strong style="font-size: 1.1rem; color: #0d6efd;">{{ results.cce.rmse | round(4) }}</strong>
+                        <strong style="font-size: 1.1rem; color: #0d6efd;">{% if results.cce.rmse is not none and results.cce.rmse > 0 %}{{ results.cce.rmse | round(4) }}{% endif %}</strong>
                     </div>
                     <div class="summary-stat" style="padding: 0.75rem 0;">
                         <span class="summary-label" style="display: block; font-size: 0.85rem; color: #6c757d; margin-bottom: 0.3rem;">DL RMSE</span>
-                        <strong style="font-size: 1.1rem; color: #0d6efd;">{{ results.dl.rmse | round(4) }}</strong>
+                        <strong style="font-size: 1.1rem; color: #0d6efd;">{% if results.dl.rmse is not none and results.dl.rmse > 0 %}{{ results.dl.rmse | round(4) }}{% endif %}</strong>
                     </div>
                 </div>
             </div>

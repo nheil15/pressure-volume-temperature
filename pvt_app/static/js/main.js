@@ -885,11 +885,17 @@ function initializeCharts() {
                 temperature: rawResultData.phase_envelope.temperature,
                 bubblePressure: rawResultData.phase_envelope.bubble_pressure,
                 dewPressure: rawResultData.phase_envelope.dew_pressure,
+                criticalTemperature: rawResultData.phase_envelope.critical_temperature,
+                criticalPressure: rawResultData.phase_envelope.critical_pressure,
+                closureTemperature: rawResultData.phase_envelope.closure_temperature,
+                closurePressure: rawResultData.phase_envelope.closure_pressure,
                 cricondenthermTemperature: rawResultData.phase_envelope.cricondentherm_temperature,
                 cricondenthermPressure: rawResultData.phase_envelope.cricondentherm_pressure,
                 cricondenbarTemperature: rawResultData.phase_envelope.cricondenbar_temperature,
                 cricondenbarPressure: rawResultData.phase_envelope.cricondenbar_pressure,
             } : null,
+            ternaryPlots: rawResultData.ternary_plots || [],
+            dl1PropertyPlots: rawResultData.dl1_property_plots || {},
         };
 
     const bubblePoint = Number(resultData.bubblePointPressure);
@@ -1217,10 +1223,14 @@ function initializeCharts() {
         Plotly.newPlot('fingerprintChart', fingerprintTraces, fingerprintLayout, { responsive: true });
     }
 
-    if (resultData.phaseEnvelope) {
-        // Use actual reservoir temperature and bubble point from user input.
-        const operatingPointTemperature = Number(resultData.submitted_inputs?.reservoir_temperature || resultData.reservoir_temperature || 220);
-        const operatingPointPressure = Number(resultData.bubble_point_pressure || 2516.7);
+    if (resultData.phaseEnvelope && resultData.phaseEnvelope.temperature) {
+        // Use actual reservoir temperature and bubble point from user input; no hardcoded fallbacks
+        const operatingPointTemperature = resultData.submitted_inputs?.reservoir_temperature ?? resultData.reservoir_temperature ?? null;
+        const operatingPointPressure = resultData.bubble_point_pressure
+            ?? resultData.bubblePointPressure
+            ?? resultData.submitted_inputs?.pressure_max
+            ?? resultData.pressure_range?.maximum
+            ?? null;
 
         // Bubble point graph using Plotly
         const bubblePointTraces = [
@@ -1255,6 +1265,9 @@ function initializeCharts() {
         Plotly.newPlot('bubblePointChart', bubblePointTraces, bubblePointLayout, { responsive: true });
 
         // Phase envelope plot using Plotly
+        const phaseLoopTemperature = [...resultData.phaseEnvelope.temperature, ...[...resultData.phaseEnvelope.temperature].slice().reverse()];
+        const phaseLoopPressure = [...resultData.phaseEnvelope.bubblePressure, ...[...resultData.phaseEnvelope.dewPressure].slice().reverse()];
+
         const phaseTraces = [
             {
                 x: resultData.phaseEnvelope.temperature,
@@ -1273,30 +1286,72 @@ function initializeCharts() {
                 line: { color: '#fd7e14', width: 2.2 },
             },
             {
-                x: [operatingPointTemperature],
-                y: [operatingPointPressure],
-                name: `Operating Point (${operatingPointTemperature.toFixed(1)}°F, ${operatingPointPressure.toFixed(1)} psig)`,
+                x: phaseLoopTemperature,
+                y: phaseLoopPressure,
+                name: 'Closed Phase Envelope',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: 'rgba(13, 110, 253, 0.25)', width: 1.5 },
+                fill: 'toself',
+                fillcolor: 'rgba(13, 110, 253, 0.08)',
+                hoverinfo: 'skip',
+                showlegend: false,
+            },
+        ];
+
+        // Add operating point marker only when both temperature and pressure are provided
+        const opTempNum = Number(operatingPointTemperature);
+        const opPresNum = Number(operatingPointPressure);
+        if (!Number.isNaN(opTempNum) && !Number.isNaN(opPresNum)) {
+            phaseTraces.push({
+                x: [opTempNum],
+                y: [opPresNum],
+                name: `Bubble Point (${opTempNum.toFixed(1)}°F, ${opPresNum.toFixed(1)} psig)`,
                 type: 'scatter',
                 mode: 'markers',
                 marker: { size: 10, color: '#212529', symbol: 'circle' },
-            },
-            {
-                x: [Number(resultData.phaseEnvelope.cricondenbarTemperature)],
-                y: [Number(resultData.phaseEnvelope.cricondenbarPressure)],
+            });
+        }
+
+        const criticalTemp = Number(resultData.phaseEnvelope.criticalTemperature ?? resultData.phaseEnvelope.cricondenthermTemperature);
+        const criticalPressure = Number(resultData.phaseEnvelope.criticalPressure ?? resultData.phaseEnvelope.cricondenthermPressure);
+        if (Number.isFinite(criticalTemp) && Number.isFinite(criticalPressure)) {
+            phaseTraces.push({
+                x: [criticalTemp],
+                y: [criticalPressure],
+                name: 'Critical Point',
+                type: 'scatter',
+                mode: 'markers',
+                marker: { size: 12, color: '#111827', symbol: 'diamond' },
+            });
+        }
+
+        // Add markers for cricondenbar and cricondentherm if present
+        const cdbTemp = Number(resultData.phaseEnvelope.cricondenbarTemperature);
+        const cdbPres = Number(resultData.phaseEnvelope.cricondenbarPressure);
+        if (Number.isFinite(cdbTemp) && Number.isFinite(cdbPres)) {
+            phaseTraces.push({
+                x: [cdbTemp],
+                y: [cdbPres],
                 name: 'Cricondenbar',
                 type: 'scatter',
                 mode: 'markers',
                 marker: { size: 10, color: '#8b5cf6', symbol: 'circle' },
-            },
-            {
-                x: [Number(resultData.phaseEnvelope.cricondenthermTemperature)],
-                y: [Number(resultData.phaseEnvelope.cricondenthermPressure)],
+            });
+        }
+
+        const cdtTemp = Number(resultData.phaseEnvelope.cricondenthermTemperature);
+        const cdtPres = Number(resultData.phaseEnvelope.cricondenthermPressure);
+        if (Number.isFinite(cdtTemp) && Number.isFinite(cdtPres)) {
+            phaseTraces.push({
+                x: [cdtTemp],
+                y: [cdtPres],
                 name: 'Cricondentherm',
                 type: 'scatter',
                 mode: 'markers',
                 marker: { size: 10, color: '#0f766e', symbol: 'circle' },
-            },
-        ];
+            });
+        }
 
         const phaseLayout = {
             title: 'Phase Envelope (P-T)',
@@ -1311,144 +1366,153 @@ function initializeCharts() {
             hovermode: 'closest',
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
-            shapes: [
-                {
-                    type: 'line',
-                    x0: operatingPointTemperature,
-                    y0: Math.min(...resultData.phaseEnvelope.bubblePressure),
-                    x1: operatingPointTemperature,
-                    y1: Math.max(...resultData.phaseEnvelope.dewPressure),
-                    line: {
-                        color: '#212529',
-                        width: 1,
-                        dash: 'dash',
-                    },
-                },
-            ],
+            shapes: (() => {
+                // Only add a vertical operating-point line if a valid temperature is provided
+                const shapes = [];
+                if (!Number.isNaN(opTempNum)) {
+                    shapes.push({
+                        type: 'line',
+                        x0: opTempNum,
+                        y0: Math.min(...resultData.phaseEnvelope.bubblePressure),
+                        x1: opTempNum,
+                        y1: Math.max(...resultData.phaseEnvelope.dewPressure),
+                        line: {
+                            color: '#212529',
+                            width: 1,
+                            dash: 'dash',
+                        },
+                    });
+                }
+                return shapes;
+            })(),
         };
 
         Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
     }
 
-    // ===== TERNARY PLOTS (Figures 3-5) =====
+    // ===== TERNARY PLOTS (Figures 3-5) ===== (skipped when data is empty)
     if (resultData.ternaryPlots && resultData.ternaryPlots.length >= 3) {
         const ternaryChartIds = ['ternaryChart1', 'ternaryChart2', 'ternaryChart3'];
         const ternarySubtitleIds = ['ternarySubtitle1', 'ternarySubtitle2', 'ternarySubtitle3'];
         const ternarySaveIds = ['ternarySave1', 'ternarySave2', 'ternarySave3'];
 
         function normalizeTernaryPoint(a, b, c) {
-            const values = [Math.max(a, 0), Math.max(b, 0), Math.max(c, 0)];
+            const values = [Math.max(a || 0, 0), Math.max(b || 0, 0), Math.max(c || 0, 0)];
             const total = values[0] + values[1] + values[2] || 1;
             return values.map((value) => (value / total) * 100);
         }
         
         for (let i = 0; i < 3; i++) {
-            const ternaryData = resultData.ternaryPlots[i];
-            const ternaryPressure = Number(ternaryData.pressure);
-            const ternaryTemperature = Number(ternaryData.temperature);
-            const aValue = ternaryData.co2_n2 * 100;
-            const bValue = ternaryData.light_hc * 100;
-            const cValue = ternaryData.heavy_hc * 100;
+            try {
+                const ternaryData = resultData.ternaryPlots[i];
+                if (!ternaryData) continue;
+                
+                const ternaryPressure = Number(ternaryData.pressure) || 0;
+                const ternaryTemperature = Number(ternaryData.temperature) || 0;
+                const aValue = (Number(ternaryData.co2_n2) || 0) * 100;
+                const bValue = (Number(ternaryData.light_hc) || 0) * 100;
+                const cValue = (Number(ternaryData.heavy_hc) || 0) * 100;
 
-            const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
-            if (subtitleNode) {
-                subtitleNode.textContent = Number.isFinite(ternaryPressure)
-                    ? `Ternary Plot at ${ternaryPressure.toFixed(1)} psi`
-                    : 'Ternary Plot';
-            }
+                const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
+                if (subtitleNode) {
+                    subtitleNode.textContent = Number.isFinite(ternaryPressure) && ternaryPressure !== 0
+                        ? `Ternary Plot at ${ternaryPressure.toFixed(1)} psi`
+                        : 'Ternary Plot';
+                }
 
-            const saveButton = document.getElementById(ternarySaveIds[i]);
-            if (saveButton && Number.isFinite(ternaryPressure)) {
-                saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_${ternaryPressure.toFixed(0)}psi')`);
-            }
+                const saveButton = document.getElementById(ternarySaveIds[i]);
+                if (saveButton && Number.isFinite(ternaryPressure) && ternaryPressure !== 0) {
+                    saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_${ternaryPressure.toFixed(0)}psi')`);
+                }
 
-            const shadedVertices = [
-                normalizeTernaryPoint(aValue + 7, bValue - 3.5, cValue - 3.5),
-                normalizeTernaryPoint(aValue - 3.5, bValue + 7, cValue - 3.5),
-                normalizeTernaryPoint(aValue - 3.5, bValue - 3.5, cValue + 7),
-            ];
+                const shadedVertices = [
+                    normalizeTernaryPoint(aValue + 7, bValue - 3.5, cValue - 3.5),
+                    normalizeTernaryPoint(aValue - 3.5, bValue + 7, cValue - 3.5),
+                    normalizeTernaryPoint(aValue - 3.5, bValue - 3.5, cValue + 7),
+                ];
 
-            const shadedTrace = {
-                a: [shadedVertices[0][0], shadedVertices[1][0], shadedVertices[2][0], shadedVertices[0][0]],
-                b: [shadedVertices[0][1], shadedVertices[1][1], shadedVertices[2][1], shadedVertices[0][1]],
-                c: [shadedVertices[0][2], shadedVertices[1][2], shadedVertices[2][2], shadedVertices[0][2]],
-                type: 'scatterternary',
-                mode: 'lines',
-                line: {
-                    color: 'rgba(13, 110, 253, 0.55)',
-                    width: 1.25,
-                },
-                fill: 'toself',
-                fillcolor: 'rgba(13, 110, 253, 0.16)',
-                hoverinfo: 'skip',
-                showlegend: false,
-                name: 'Shaded zone'
-            };
-            
-            // Create Plotly ternary diagram
-            const ternaryTrace = {
-                a: [aValue],  // CO2/N2 percentage
-                b: [bValue],  // Light HC percentage
-                c: [cValue],  // Heavy HC percentage
-                type: 'scatterternary',
-                mode: 'markers',
-                marker: {
-                    size: 12,
-                    color: '#0d6efd',
-                    symbol: 'circle',
-                    line: { color: '#0856ca', width: 2 }
-                },
-                text: [`CO₂/N₂: ${(ternaryData.co2_n2 * 100).toFixed(1)}%<br>Light HC: ${(ternaryData.light_hc * 100).toFixed(1)}%<br>Heavy HC: ${(ternaryData.heavy_hc * 100).toFixed(1)}%`],
-                hovertemplate: '%{text}<extra></extra>',
-                name: 'Composition'
-            };
-
-            // Set an initial zoom window around the composition/shaded region
-            // so the plot starts clear and readable without over-zooming.
-            const focusPoints = [...shadedVertices, [aValue, bValue, cValue]];
-            const padding = 5;
-            const minA = Math.max(0, Math.min(...focusPoints.map((point) => point[0])) - padding);
-            const minB = Math.max(0, Math.min(...focusPoints.map((point) => point[1])) - padding);
-            const minC = Math.max(0, Math.min(...focusPoints.map((point) => point[2])) - padding);
-            
-            const ternaryLayout = {
-                title: `Ternary Plot (T=${Number.isFinite(ternaryTemperature) ? ternaryTemperature.toFixed(1) : 'N/A'}°F, P=${Number.isFinite(ternaryPressure) ? ternaryPressure.toFixed(1) : 'N/A'} psi)`,
-                ternary: {
-                    sum: 100,
-                    aaxis: {
-                        title: 'CO₂/N₂ (%)',
-                        min: minA,
-                        tickfont: { size: 12 },
-                        showline: true,
-                        showgrid: true,
+                const shadedTrace = {
+                    a: [shadedVertices[0][0], shadedVertices[1][0], shadedVertices[2][0], shadedVertices[0][0]],
+                    b: [shadedVertices[0][1], shadedVertices[1][1], shadedVertices[2][1], shadedVertices[0][1]],
+                    c: [shadedVertices[0][2], shadedVertices[1][2], shadedVertices[2][2], shadedVertices[0][2]],
+                    type: 'scatterternary',
+                    mode: 'lines',
+                    line: {
+                        color: 'rgba(13, 110, 253, 0.55)',
+                        width: 1.25,
                     },
-                    baxis: {
-                        title: 'Light HC: C1-C3 (%)',
-                        min: minB,
-                        tickfont: { size: 12 },
-                        showline: true,
-                        showgrid: true,
+                    fill: 'toself',
+                    fillcolor: 'rgba(13, 110, 253, 0.16)',
+                    hoverinfo: 'skip',
+                    showlegend: false,
+                    name: 'Shaded zone'
+                };
+                
+                // Create Plotly ternary diagram
+                const ternaryTrace = {
+                    a: [aValue],
+                    b: [bValue],
+                    c: [cValue],
+                    type: 'scatterternary',
+                    mode: 'markers',
+                    marker: {
+                        size: 12,
+                        color: '#0d6efd',
+                        symbol: 'circle',
+                        line: { color: '#0856ca', width: 2 }
                     },
-                    caxis: {
-                        title: 'Heavy HC: C4+ (%)',
-                        min: minC,
-                        tickfont: { size: 12 },
-                        showline: true,
-                        showgrid: true,
-                    }
-                },
-                height: 500,
-                margin: { t: 60, r: 60, b: 60, l: 60 },
-                font: { size: 11 },
-                showlegend: false
-            };
-            
-            Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ternaryTrace], ternaryLayout, { responsive: true });
+                    text: [`CO₂/N₂: ${((Number(ternaryData.co2_n2) || 0) * 100).toFixed(1)}%<br>Light HC: ${((Number(ternaryData.light_hc) || 0) * 100).toFixed(1)}%<br>Heavy HC: ${((Number(ternaryData.heavy_hc) || 0) * 100).toFixed(1)}%`],
+                    hovertemplate: '%{text}<extra></extra>',
+                    name: 'Composition'
+                };
+
+                const focusPoints = [...shadedVertices, [aValue, bValue, cValue]];
+                const padding = 5;
+                const minA = Math.max(0, Math.min(...focusPoints.map((point) => point[0])) - padding);
+                const minB = Math.max(0, Math.min(...focusPoints.map((point) => point[1])) - padding);
+                const minC = Math.max(0, Math.min(...focusPoints.map((point) => point[2])) - padding);
+                
+                const ternaryLayout = {
+                    title: `Ternary Plot (T=${Number.isFinite(ternaryTemperature) ? ternaryTemperature.toFixed(1) : 'N/A'}°F, P=${Number.isFinite(ternaryPressure) ? ternaryPressure.toFixed(1) : 'N/A'} psi)`,
+                    ternary: {
+                        sum: 100,
+                        aaxis: {
+                            title: 'CO₂/N₂ (%)',
+                            min: minA,
+                            tickfont: { size: 12 },
+                            showline: true,
+                            showgrid: true,
+                        },
+                        baxis: {
+                            title: 'Light HC: C1-C3 (%)',
+                            min: minB,
+                            tickfont: { size: 12 },
+                            showline: true,
+                            showgrid: true,
+                        },
+                        caxis: {
+                            title: 'Heavy HC: C4+ (%)',
+                            min: minC,
+                            tickfont: { size: 12 },
+                            showline: true,
+                            showgrid: true,
+                        }
+                    },
+                    height: 500,
+                    margin: { t: 60, r: 60, b: 60, l: 60 },
+                    font: { size: 11 },
+                    showlegend: false
+                };
+                
+                Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ternaryTrace], ternaryLayout, { responsive: true });
+            } catch (error) {
+                console.error(`Error rendering ternary plot ${i}:`, error);
+            }
         }
     }
 
-    // ===== DL1 PROPERTY PLOTS (Figures 6-12) =====
-    if (resultData.dl1PropertyPlots) {
+    // ===== DL1 PROPERTY PLOTS (Figures 6-12) ===== (skipped when data is empty)
+    if (resultData.dl1PropertyPlots && resultData.dl1PropertyPlots.pressure && resultData.dl1PropertyPlots.pressure.length > 0) {
         const props = resultData.dl1PropertyPlots;
         
         // Figure 6: CCE Relative Volume (using existing cceChart)
@@ -1637,8 +1701,12 @@ function validateFormInput() {
         errors.push('Each composition row must include Component, % Mole Fraction, Mole Weight, and Specific Gravity.');
     }
 
-    if (cceRows === 0 && dlRows === 0) {
-        errors.push('Please provide at least one complete row of data in CCE or DL table (both pressure and value required).');
+    if (cceRows === 0) {
+        errors.push('Please provide at least one complete row of data in the CCE table (both pressure and value required).');
+    }
+
+    if (dlRows === 0) {
+        errors.push('Please provide at least one complete row of data in the DL table (both pressure and value required).');
     }
 
     if (cceRows > 0 && !hasSelectedBubblePoint('cce_table')) {

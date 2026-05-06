@@ -6,12 +6,15 @@ import uuid
 
 import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter
+from scipy.interpolate import UnivariateSpline, CubicSpline
 from flask import Flask, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "pvt-mvp-secret-key")
 
 RESULTS_CACHE = {}
+ACTIVE_COMPOSITION_PROFILE = {}
 
 
 # Jinja filter to render markdown-style interpretation as HTML
@@ -29,7 +32,7 @@ def render_interpretation(text):
 
 app.jinja_env.filters["render_interpretation"] = render_interpretation
 
-KNOWN_BUBBLE_POINT = 2516.7
+KNOWN_BUBBLE_POINT = None
 
 # ===== Regression & EOS Tuning Parameters =====
 # These parameters control CCE regression fit and can be adjusted to improve RMSE
@@ -276,6 +279,54 @@ def load_dataset(text_value, file_value, expected_value_name, tokens, fallback_r
     return pd.DataFrame(fallback_rows)
 
 
+def extract_series_from_raw_csv(text_value, file_value, value_tokens):
+    """Extract a pressure/value series from a raw CSV while preserving the original value column."""
+    dataframe = pd.DataFrame()
+
+    if text_value and str(text_value).strip():
+        try:
+            dataframe = pd.read_csv(io.StringIO(str(text_value).strip()))
+        except Exception:
+            dataframe = pd.DataFrame()
+
+    if dataframe.empty and file_value and file_value.filename:
+        try:
+            file_value.stream.seek(0)
+        except Exception:
+            pass
+
+        try:
+            dataframe = pd.read_csv(file_value)
+        except Exception:
+            dataframe = pd.DataFrame()
+
+    if dataframe.empty:
+        return pd.DataFrame()
+
+    normalized = {column: str(column).strip().lower().replace(" ", "_") for column in dataframe.columns}
+    pressure_column = next((column for column, normalized_name in normalized.items() if "pressure" in normalized_name), None)
+    if not pressure_column:
+        return pd.DataFrame()
+
+    value_column = None
+    for token in value_tokens:
+        token = str(token).lower().replace(" ", "_")
+        for column, normalized_name in normalized.items():
+            if token in normalized_name:
+                value_column = column
+                break
+        if value_column:
+            break
+
+    if not value_column:
+        return pd.DataFrame()
+
+    clean = dataframe[[pressure_column, value_column]].copy()
+    clean.columns = ["pressure", "value"]
+    clean = clean.apply(pd.to_numeric, errors="coerce").dropna(subset=["pressure", "value"])
+    return clean
+
+
 def build_pressure_axis(minimum_pressure, maximum_pressure, step):
     """Create a descending pressure axis for the simplified simulation."""
     if maximum_pressure <= minimum_pressure:
@@ -292,7 +343,12 @@ def detect_bubble_point(pressure_values):
     """Pick the pressure closest to the known bubble point target."""
     pressure_array = np.asarray(pressure_values, dtype=float)
     if pressure_array.size == 0:
-        return KNOWN_BUBBLE_POINT
+        return None
+
+    if KNOWN_BUBBLE_POINT is None:
+        # If no known reference, pick the median measurement pressure as a best-effort
+        median_idx = int(np.argsort(pressure_array)[pressure_array.size // 2])
+        return float(pressure_array[median_idx])
 
     index = int(np.abs(pressure_array - KNOWN_BUBBLE_POINT).argmin())
     return float(pressure_array[index])
@@ -525,31 +581,55 @@ def estimate_bubble_and_dew_pressures_vs_temperature(composition_dict, temperatu
     return np.asarray(bubble_pressures, dtype=float), np.asarray(dew_pressures, dtype=float)
 
 
-def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_point_pressure):
+def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_point_pressure, min_meas_pressure=None, max_meas_pressure=None):
     """Build Pressure-Temperature phase envelope with operating-point anchoring."""
     heavy_fraction = float(composition_dict.get("c7+", 0.0) + composition_dict.get("c7", 0.0))
-    anchor_temperature_f = 220.0
+    anchor_temperature_f = float(operating_temperature_f)
 
-    # Extend the temperature domain so the cricondentherm is not forced by the axis end.
-    temp_min_f = max(-20.0, float(operating_temperature_f) - 180.0)
-    temp_max_f = min(900.0, max(float(operating_temperature_f) + 420.0, 650.0 + 120.0 * np.clip(heavy_fraction, 0.0, 0.8)))
-    base_axis = np.linspace(temp_min_f, temp_max_f, 301)
+    # Derive a temperature window around the reservoir temperature influenced by composition
+    # and ensure a minimum spread to avoid degenerate envelopes.
+    base_below = 50.0
+    base_above = 70.0
+    temp_span_below = base_below + 30.0 * np.clip(heavy_fraction, 0.0, 1.0)
+    temp_span_above = base_above + 40.0 * np.clip(heavy_fraction, 0.0, 1.0)
+    temp_min_f = max(20.0, float(operating_temperature_f) - temp_span_below)
+    temp_max_f = min(700.0, float(operating_temperature_f) + temp_span_above)
+    if temp_max_f <= temp_min_f + 20.0:
+        temp_max_f = temp_min_f + 20.0
+
+    base_axis = np.linspace(temp_min_f, temp_max_f, 241)
     temperature_axis = np.unique(np.sort(np.append(base_axis, [float(operating_temperature_f), anchor_temperature_f])))
 
     # Use a normalized coordinate along the envelope path.
     x = np.linspace(0.0, 1.0, len(temperature_axis))
 
-    # Closed low-temperature endpoint.
-    low_pressure = max(180.0, 0.08 * float(bubble_point_pressure))
+    # Closed low-temperature endpoint: prefer measurement-derived floor if available,
+    # otherwise fall back to a conservative fraction of Pb. This reduces hardcoded guardrails.
+    try:
+        if min_meas_pressure is not None and float(min_meas_pressure) > 0:
+            low_pressure = max(1.0, float(min_meas_pressure) * 0.75)
+        else:
+            low_pressure = max(250.0, 0.22 * float(bubble_point_pressure))
+    except Exception:
+        low_pressure = max(250.0, 0.22 * float(bubble_point_pressure))
 
     # Force the bubble branch to pass exactly through the operating point.
+    # Operating point position along the normalized axis (prefer data-driven location,
+    # clamp to avoid degenerate shapes).
     op_x = (anchor_temperature_f - temp_min_f) / max(temp_max_f - temp_min_f, 1.0)
-    op_x = float(np.clip(op_x, 0.12, 0.42))
+    op_x = float(np.clip(op_x, 0.05, 0.95))
     bubble_peak_pressure = float(bubble_point_pressure)
 
-    # High-temperature closure is at a much higher pressure than the bubble point,
-    # so the dew-curve peak can sit in the 4k-7k+ range for heavy fluids.
-    high_pressure = max(4200.0, bubble_peak_pressure * (1.6 + 0.65 * np.clip(heavy_fraction, 0.0, 0.8)))
+    # Keep the upper closure near the measured bubble point or measurement-derived ceiling.
+    try:
+        if max_meas_pressure is not None and float(max_meas_pressure) > 0:
+            high_pressure = max(float(max_meas_pressure) * 1.05, bubble_peak_pressure * 1.05)
+        else:
+            high_pressure = bubble_peak_pressure * (1.14 + 0.08 * np.clip(heavy_fraction, 0.0, 0.8))
+            high_pressure = float(np.clip(high_pressure, bubble_peak_pressure + 120.0, bubble_peak_pressure * 1.35))
+    except Exception:
+        high_pressure = bubble_peak_pressure * (1.14 + 0.08 * np.clip(heavy_fraction, 0.0, 0.8))
+        high_pressure = float(np.clip(high_pressure, bubble_peak_pressure + 120.0, bubble_peak_pressure * 1.35))
 
     # Bubble branch: smooth, concave rise from the left closure to the operating point,
     # then continues upward to the right closure.
@@ -568,10 +648,35 @@ def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_po
     bubble_curve[right_mask] = bubble_peak_pressure + (high_pressure - bubble_peak_pressure) * right_shape
 
     # Dew branch: same closures, with an interior maximum (cricondenbar) well above Pb.
-    x_peak = 0.68 - 0.05 * np.clip(heavy_fraction, 0.0, 0.8)
-    x_peak = float(np.clip(x_peak, 0.58, 0.76))
-    dew_peak_pressure = max(4200.0, 2.2 * bubble_peak_pressure + 1200.0 * np.clip(heavy_fraction, 0.0, 0.8))
-    dew_peak_pressure = min(dew_peak_pressure, 7800.0)
+    # Peak location for the dew branch adjusts slightly with heaviness
+    x_peak = 0.58 - 0.03 * np.clip(heavy_fraction, 0.0, 1.0)
+    x_peak = float(np.clip(x_peak, 0.50, 0.80))
+
+    # Compute a data-driven dew peak pressure using available measurement ceilings and composition.
+    try:
+        meas_span = None
+        if max_meas_pressure is not None and float(max_meas_pressure) > float(bubble_point_pressure):
+            meas_span = float(max_meas_pressure) - float(bubble_point_pressure)
+    except Exception:
+        meas_span = None
+
+    # Base margin informed by bubble point and heaviness
+    base_margin = max(20.0, 0.03 * float(bubble_point_pressure))
+    if meas_span is not None and meas_span > 0:
+        meas_margin = max(base_margin, 0.10 * meas_span)
+    else:
+        meas_margin = base_margin
+
+    # Scale margin with heavy fraction to allow larger cricondenbar for heavy fluids
+    margin = meas_margin * (1.0 + 0.5 * np.clip(heavy_fraction, 0.0, 1.0))
+
+    dew_peak_pressure_candidates = [
+        float(bubble_peak_pressure) + 1.5 * margin,
+        (float(max_meas_pressure) if max_meas_pressure is not None and float(max_meas_pressure) > 0 else float(bubble_peak_pressure) * 1.02),
+        float(bubble_peak_pressure) * (1.02 + 0.04 * np.clip(heavy_fraction, 0.0, 1.0)),
+    ]
+    dew_peak_pressure = float(max(dew_peak_pressure_candidates))
+    dew_peak_pressure = float(np.clip(dew_peak_pressure, float(bubble_peak_pressure) + 50.0, float(bubble_peak_pressure) * 1.6))
 
     dew_curve = np.empty_like(x)
     left_mask = x <= x_peak
@@ -579,11 +684,11 @@ def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_po
 
     left_u = np.zeros_like(x)
     left_u[left_mask] = x[left_mask] / max(x_peak, 1e-6)
-    dew_curve[left_mask] = low_pressure + (dew_peak_pressure - low_pressure) * (left_u[left_mask] ** 1.85)
+    dew_curve[left_mask] = low_pressure + (dew_peak_pressure - low_pressure) * (left_u[left_mask] ** 1.55)
 
     right_u = np.zeros_like(x)
     right_u[right_mask] = (x[right_mask] - x_peak) / max(1.0 - x_peak, 1e-6)
-    dew_curve[right_mask] = dew_peak_pressure - (dew_peak_pressure - high_pressure) * (right_u[right_mask] ** 1.25)
+    dew_curve[right_mask] = dew_peak_pressure - (dew_peak_pressure - high_pressure) * (right_u[right_mask] ** 1.10)
 
     # Enforce exact closure at both ends.
     bubble_curve[0] = low_pressure
@@ -597,21 +702,80 @@ def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_po
     dew_curve[op_index] = max(dew_curve[op_index], float(bubble_point_pressure) + 150.0)
 
     # Keep dew above bubble everywhere except the shared closures.
+    # Enforce dew stays above bubble by a measurement/composition-driven margin
     for idx in range(1, len(temperature_axis) - 1):
-        dew_curve[idx] = max(dew_curve[idx], bubble_curve[idx] + 40.0)
+        dew_curve[idx] = max(float(dew_curve[idx]), float(bubble_curve[idx]) + float(margin))
 
-    # Cricondenbar is the highest point on the dew curve, excluding the closures.
-    cricondenbar_index = int(np.argmax(dew_curve[1:-1])) + 1
+    # Smooth the dew curve using a spline to ensure a single continuous curve
+    # from the divergence region through the critical region.
+    try:
+        temp_axis = np.asarray(temperature_axis, dtype=float)
+        dew_vals = np.asarray(dew_curve, dtype=float)
+
+        # Handle NaNs by linear interpolation over finite values
+        finite = np.isfinite(dew_vals)
+        if finite.sum() < 3:
+            smoothed_dew = dew_vals.copy()
+        else:
+            try:
+                spline = UnivariateSpline(temp_axis[finite], dew_vals[finite], k=3, s=0.0)
+                smoothed_dew = spline(temp_axis)
+            except Exception:
+                # Fall back to CubicSpline
+                try:
+                    cubic = CubicSpline(temp_axis[finite], dew_vals[finite], bc_type='natural')
+                    smoothed_dew = cubic(temp_axis)
+                except Exception:
+                    smoothed_dew = dew_vals.copy()
+
+        # Preserve endpoint closures and ensure dew > bubble margin
+        smoothed_dew[0] = low_pressure
+        smoothed_dew[-1] = high_pressure
+        for idx in range(1, len(smoothed_dew) - 1):
+            smoothed_dew[idx] = max(float(smoothed_dew[idx]), float(bubble_curve[idx]) + 40.0)
+
+        dew_curve = smoothed_dew
+    except Exception:
+        dew_curve = np.asarray(dew_curve, dtype=float)
+
+    # Cricondenbar: highest pressure on the entire dew curve (exclude closures)
+    interior_dew = np.asarray(dew_curve[1:-1], dtype=float)
+    if interior_dew.size > 0:
+        cricondenbar_index = int(np.argmax(interior_dew)) + 1
+    else:
+        cricondenbar_index = 0
+
+    # Critical point: point of minimum separation between dew and bubble curves
+    diff = np.abs(np.asarray(dew_curve, dtype=float) - np.asarray(bubble_curve, dtype=float))
+    interior_diff = diff[1:-1]
+    if interior_diff.size > 0:
+        critical_index = int(np.argmin(interior_diff)) + 1
+    else:
+        critical_index = len(temperature_axis) - 1
+
+    critical_temperature = float(temperature_axis[critical_index])
+    critical_pressure = float((float(dew_curve[critical_index]) + float(bubble_curve[critical_index])) / 2.0)
+
+    # Cricondentherm: rightmost (highest temperature) point on the envelope
     cricondentherm_index = len(temperature_axis) - 1
+    cricondentherm_temperature = float(temperature_axis[cricondentherm_index])
+    cricondentherm_pressure = float(dew_curve[cricondentherm_index])
+    # Ensure cricondentherm pressure lies below the critical pressure by at least the margin
+    if cricondentherm_pressure >= critical_pressure:
+        cricondentherm_pressure = max(min(cricondentherm_pressure, critical_pressure - margin / 2.0), 1.0)
 
     return {
         "temperature": [float(value) for value in temperature_axis],
         "bubble_pressure": [float(value) for value in bubble_curve],
         "dew_pressure": [float(value) for value in dew_curve],
-        "cricondentherm_temperature": float(temperature_axis[cricondentherm_index]),
-        "cricondentherm_pressure": float(high_pressure),
-        "cricondenbar_temperature": float(temperature_axis[cricondenbar_index]),
-        "cricondenbar_pressure": float(dew_curve[cricondenbar_index]),
+        "critical_temperature": critical_temperature,
+        "critical_pressure": critical_pressure,
+        "closure_temperature": float(temperature_axis[0]),
+        "closure_pressure": float(low_pressure),
+        "cricondentherm_temperature": cricondentherm_temperature,
+        "cricondentherm_pressure": cricondentherm_pressure,
+        "cricondenbar_temperature": float(temperature_axis[cricondenbar_index]) if cricondenbar_index < len(temperature_axis) else float(temperature_axis[0]),
+        "cricondenbar_pressure": float(dew_curve[cricondenbar_index]) if cricondenbar_index < len(dew_curve) else float(dew_curve[0]),
     }
 
 
@@ -680,32 +844,187 @@ def prepare_simulation_properties_table(pressure_values, cce_simulated, dl_simul
 
 def parse_composition_data(composition_csv_text):
     """Parse composition CSV data into a dict with component names and mole fractions."""
+    composition, _ = parse_composition_profile(composition_csv_text)
+    return composition
+
+
+def parse_composition_profile(composition_csv_text):
+    """Parse composition CSV data into mole fractions plus optional component metadata."""
     if not composition_csv_text or not composition_csv_text.strip():
-        return {}
+        return {}, {}
 
     composition = {}
+    profile = {}
     reader = csv.reader(io.StringIO(composition_csv_text.strip()))
     rows = list(reader)
 
     if len(rows) < 2:
-        return {}
+        return {}, {}
+
+    header = [str(column).strip().lower().replace(" ", "_") for column in rows[0]]
+    component_index = next((idx for idx, value in enumerate(header) if "component" in value), 0)
+    mole_fraction_index = next((idx for idx, value in enumerate(header) if "mole_fraction" in value or "%_mole_fraction" in value or "fraction" == value), 1)
+    mole_weight_index = next((idx for idx, value in enumerate(header) if "mole_weight" in value or "molecular_weight" in value or value in {"mw"}), None)
+    specific_gravity_index = next((idx for idx, value in enumerate(header) if "specific_gravity" in value or value in {"sg", "sp_gr"}), None)
+    # Allow explicit component property overrides in the uploaded CSV: tc, pc, omega
+    tc_index = next((idx for idx, value in enumerate(header) if "tc" in value or "critical_temperature" in value or "t_c" in value), None)
+    pc_index = next((idx for idx, value in enumerate(header) if "pc" in value or "critical_pressure" in value or "p_c" in value), None)
+    omega_index = next((idx for idx, value in enumerate(header) if "omega" in value or "acentric" in value or "acentric_factor" in value), None)
 
     for row in rows[1:]:
-        if len(row) < 2:
+        if len(row) <= mole_fraction_index:
             continue
-        component = normalize_component_name(row[0])
+
+        component = normalize_component_name(row[component_index] if len(row) > component_index else "")
+        if not component:
+            continue
+
         try:
-            mole_fraction = float(row[1])
-            if mole_fraction > 0:
-                composition[component] = mole_fraction
+            mole_fraction = float(row[mole_fraction_index])
         except (ValueError, IndexError):
             continue
+
+        if mole_fraction <= 0:
+            continue
+
+        mole_weight = None
+        specific_gravity = None
+        tc_val = None
+        pc_val = None
+        omega_val = None
+        if mole_weight_index is not None and len(row) > mole_weight_index:
+            try:
+                mole_weight = float(row[mole_weight_index])
+            except (ValueError, TypeError):
+                mole_weight = None
+        if specific_gravity_index is not None and len(row) > specific_gravity_index:
+            try:
+                specific_gravity = float(row[specific_gravity_index])
+            except (ValueError, TypeError):
+                specific_gravity = None
+        # Parse explicit Tc/Pc/Omega if provided
+        if tc_index is not None and len(row) > tc_index:
+            try:
+                tc_val = float(row[tc_index])
+            except (ValueError, TypeError):
+                tc_val = None
+        if pc_index is not None and len(row) > pc_index:
+            try:
+                pc_val = float(row[pc_index])
+            except (ValueError, TypeError):
+                pc_val = None
+        if omega_index is not None and len(row) > omega_index:
+            try:
+                omega_val = float(row[omega_index])
+            except (ValueError, TypeError):
+                omega_val = None
+
+        composition[component] = mole_fraction
+        profile[component] = {
+            "mole_fraction": mole_fraction,
+            "mole_weight": mole_weight,
+            "specific_gravity": specific_gravity,
+            "tc": tc_val,
+            "pc": pc_val,
+            "omega": omega_val,
+        }
 
     total = sum(composition.values())
     if total > 0:
         composition = {k: v / total for k, v in composition.items()}
+        for component in list(profile.keys()):
+            profile[component]["mole_fraction"] = composition.get(component, profile[component]["mole_fraction"])
 
-    return composition
+    return composition, profile
+
+
+def get_profile_weighted_average(profile, field_name):
+    values = []
+    weights = []
+    for entry in (profile or {}).values():
+        value = entry.get(field_name)
+        fraction = entry.get("mole_fraction", 0.0)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+            fraction = float(fraction)
+        except (TypeError, ValueError):
+            continue
+        values.append(value)
+        weights.append(max(fraction, 0.0))
+
+    if not values:
+        return None
+
+    weight_sum = sum(weights)
+    if weight_sum <= 0:
+        return float(np.mean(values))
+
+    return float(sum(value * weight for value, weight in zip(values, weights)) / weight_sum)
+
+
+def build_component_property_from_profile(component, fallback_props=None):
+    profile_entry = (ACTIVE_COMPOSITION_PROFILE or {}).get(component, {})
+    # If explicit component properties were provided in the uploaded profile, prefer them.
+    explicit_tc = profile_entry.get("tc")
+    explicit_pc = profile_entry.get("pc")
+    explicit_omega = profile_entry.get("omega")
+
+    try:
+        explicit_tc = float(explicit_tc) if explicit_tc is not None else None
+    except (TypeError, ValueError):
+        explicit_tc = None
+
+    try:
+        explicit_pc = float(explicit_pc) if explicit_pc is not None else None
+    except (TypeError, ValueError):
+        explicit_pc = None
+
+    try:
+        explicit_omega = float(explicit_omega) if explicit_omega is not None else None
+    except (TypeError, ValueError):
+        explicit_omega = None
+
+    if explicit_tc is not None or explicit_pc is not None or explicit_omega is not None:
+        # Construct props using explicit values where provided, falling back to fallback_props
+        base = fallback_props or {"tc": 250.0, "pc": 40.0, "omega": 0.2}
+        tc_val = explicit_tc if explicit_tc is not None else base.get("tc")
+        pc_val = explicit_pc if explicit_pc is not None else base.get("pc")
+        omega_val = explicit_omega if explicit_omega is not None else base.get("omega")
+        return {"tc": float(tc_val), "pc": float(pc_val), "omega": float(omega_val)}
+
+    # Fall back to heuristic estimation from mole weight and specific gravity
+    mw = profile_entry.get("mole_weight")
+    sg = profile_entry.get("specific_gravity")
+
+    if mw is None and sg is None:
+        return fallback_props
+
+    base_props = fallback_props or {"tc": 250.0, "pc": 40.0, "omega": 0.2}
+
+    try:
+        mw_value = float(mw) if mw is not None else None
+    except (TypeError, ValueError):
+        mw_value = None
+
+    try:
+        sg_value = float(sg) if sg is not None else None
+    except (TypeError, ValueError):
+        sg_value = None
+
+    heaviness = 0.0
+    if mw_value is not None:
+        heaviness += float(np.clip((mw_value - 16.0) / 200.0, 0.0, 1.0))
+    if sg_value is not None:
+        heaviness += float(np.clip((sg_value - 0.55) / 0.45, 0.0, 1.0))
+    heaviness /= 2.0 if (mw_value is not None and sg_value is not None) else 1.0
+
+    tc_data = base_props["tc"] * (1.0 + 0.22 * heaviness)
+    pc_data = base_props["pc"] * (1.0 - 0.18 * heaviness)
+    omega_data = float(np.clip(base_props["omega"] + 0.25 * heaviness, 0.01, 0.95))
+
+    return {"tc": float(tc_data), "pc": float(pc_data), "omega": omega_data}
 
 
 def estimate_heavy_fraction(composition_dict):
@@ -713,20 +1032,46 @@ def estimate_heavy_fraction(composition_dict):
 
 
 def estimate_stock_tank_density(composition_dict):
+    profile_sg = get_profile_weighted_average(ACTIVE_COMPOSITION_PROFILE, "specific_gravity")
+    if profile_sg is not None:
+        return 62.4 * float(np.clip(profile_sg, 0.55, 1.10))
+
     heavy_fraction = estimate_heavy_fraction(composition_dict)
     specific_gravity = float(np.clip(0.72 + 0.45 * heavy_fraction, 0.70, 0.90))
     return 62.4 * specific_gravity
 
 
 def estimate_gas_specific_gravity(composition_dict):
+    profile_sg = get_profile_weighted_average(ACTIVE_COMPOSITION_PROFILE, "specific_gravity")
+    profile_mw = get_profile_weighted_average(ACTIVE_COMPOSITION_PROFILE, "mole_weight")
+    if profile_sg is not None or profile_mw is not None:
+        sg_term = float(profile_sg) if profile_sg is not None else 0.65
+        mw_term = float(profile_mw) if profile_mw is not None else 30.0
+        return float(np.clip(0.25 + 0.55 * sg_term + 0.0025 * mw_term, 0.55, 1.20))
+
     heavy_fraction = estimate_heavy_fraction(composition_dict)
     return float(np.clip(0.58 + 0.30 * heavy_fraction, 0.58, 0.92))
 
 
 def estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature_f, bubble_point_pressure):
+    profile_sg = get_profile_weighted_average(ACTIVE_COMPOSITION_PROFILE, "specific_gravity")
+    profile_mw = get_profile_weighted_average(ACTIVE_COMPOSITION_PROFILE, "mole_weight")
     heavy_fraction = estimate_heavy_fraction(composition_dict)
     temperature_factor = float(np.clip((float(reservoir_temperature_f) + 459.67) / 680.0, 0.92, 1.18))
-    pressure_factor = float(np.clip(float(bubble_point_pressure) / 2516.7, 0.88, 1.10))
+    # Avoid hardcoded normalization baseline; treat pressure influence conservatively
+    try:
+        pb = float(bubble_point_pressure)
+        pressure_factor = float(np.clip(pb / max(pb, 1.0), 0.88, 1.10))
+    except Exception:
+        pressure_factor = 1.0
+
+    if profile_sg is not None or profile_mw is not None:
+        sg_term = float(profile_sg) if profile_sg is not None else 0.65
+        mw_term = float(profile_mw) if profile_mw is not None else 30.0
+        composition_factor = 0.55 + 0.65 * np.clip(heavy_fraction, 0.0, 0.8) + 0.25 * np.clip(sg_term, 0.55, 1.10) + 0.003 * np.clip(mw_term, 10.0, 300.0)
+        base_gor = 250.0 + 3.25 * np.clip(mw_term, 10.0, 300.0) + 85.0 * np.clip(sg_term, 0.55, 1.10)
+        return float(base_gor * temperature_factor * pressure_factor * composition_factor)
+
     composition_factor = 1.0 + 1.15 * np.clip(heavy_fraction, 0.0, 0.8)
     return 700.0 * temperature_factor * pressure_factor * composition_factor
 
@@ -749,10 +1094,11 @@ def calculate_mixture_properties_pr(composition_dict, temperature_k, c7_omega_mu
     pure_props = {}
     for comp, mole_frac in composition_dict.items():
         props = COMPONENT_DATABASE.get(comp)
-        if props:
-            tc = props["tc"]
-            pc = props["pc"] * 1e5
-            omega = props["omega"]
+        profile_props = build_component_property_from_profile(comp, props)
+        if profile_props:
+            tc = profile_props["tc"]
+            pc = profile_props["pc"] * 1e5
+            omega = profile_props["omega"]
             
             # Apply Omega tuning multiplier for C7+
             if comp == "c7+" and c7_omega_mult != 1.0:
@@ -948,83 +1294,90 @@ def make_interpretation(bubble_point_pressure, rmse_value, first_volume, last_vo
     """
     Generate an interpretation summary (detailed) based on results and inputs.
     """
-
     if cce_rmse is None:
         cce_rmse = rmse_value
     if dl_rmse is None:
-        dl_rmse = rmse_value * 0.85
-    if reservoir_temp is None:
-        reservoir_temp = 220.0
-    # Build data-driven explanations for the interpretation summary
-    # Volumetric behavior
-    try:
-        vol_change = float(last_volume) - float(first_volume)
-        vol_pct = (vol_change / float(first_volume) * 100.0) if abs(float(first_volume)) > 1e-9 else 0.0
-    except Exception:
-        vol_change = 0.0
-        vol_pct = 0.0
+        dl_rmse = rmse_value
 
-    if vol_change > 0:
+    try:
+        first_volume = float(first_volume)
+        last_volume = float(last_volume)
+    except Exception:
+        first_volume = 0.0
+        last_volume = 0.0
+
+    try:
+        bubble_point_pressure = float(bubble_point_pressure)
+    except Exception:
+        bubble_point_pressure = 0.0
+
+    try:
+        reservoir_temp = float(reservoir_temp)
+        reservoir_temp_text = f"{reservoir_temp:.1f}°F"
+    except Exception:
+        reservoir_temp_text = "unknown temperature"
+
+    volume_delta = last_volume - first_volume
+    volume_delta_pct = (volume_delta / first_volume * 100.0) if abs(first_volume) > 1e-9 else 0.0
+
+    if volume_delta > 0:
         behavior_expl = (
-            f"As pressure decreases across the studied range the normalized relative volume increases from {first_volume:.4f} to {last_volume:.4f} "
-            f"(Δ={vol_change:.4f}, {vol_pct:.1f}% increase). This indicates net volumetric expansion and gas liberation as the fluid moves into "
-            f"the two-phase region below the bubble point at {bubble_point_pressure:.1f} psig. Expect stronger deviations in measured PVT properties "
-            f"near and below the bubble point due to phase split and free gas evolution."
+            f"The measured response increases from {first_volume:.4f} to {last_volume:.4f} across the pressure range, "
+            f"a {volume_delta_pct:.1f}% rise. That pattern is consistent with fluid expansion and solution-gas release as pressure approaches and moves below the bubble point at {bubble_point_pressure:.1f} psig."
         )
-    elif vol_change < 0:
+    elif volume_delta < 0:
         behavior_expl = (
-            f"The normalized relative volume decreases from {first_volume:.4f} to {last_volume:.4f} (Δ={vol_change:.4f}, {abs(vol_pct):.1f}% decrease), "
-            f"suggesting overall compaction/condensation behavior with pressure changes. This trend may reflect increased liquid fraction or "
-            f"measurement uncertainty near the bubble point ({bubble_point_pressure:.1f} psig)."
+            f"The measured response decreases from {first_volume:.4f} to {last_volume:.4f} across the pressure range, "
+            f"a {abs(volume_delta_pct):.1f}% drop. That indicates the system compresses with pressure increase, with the strongest change typically concentrated near the bubble point at {bubble_point_pressure:.1f} psig."
         )
     else:
         behavior_expl = (
-            f"There is negligible change in normalized relative volume across the pressure range (both start and end ~{first_volume:.4f}). "
-            f"This implies fluids remain approximately incompressible in the measured interval or the model has captured a near-constant response."
+            f"The measured response is essentially unchanged at {first_volume:.4f} through {last_volume:.4f}, showing little net volumetric shift across the tested interval."
         )
 
-    # Accuracy of EOS matching
-    eos_expl = (
-        f"The EOS matching shows CCE RMSE = {cce_rmse:.4f} and DL RMSE = {dl_rmse:.4f}. "
-        f"Numerically, this indicates {'better' if cce_rmse < dl_rmse else 'worse or comparable'} fit for CCE relative to DL. "
-        f"RMSE magnitudes suggest {'high confidence in model predictions' if cce_rmse < 0.05 and dl_rmse < 0.07 else 'moderate confidence; review sub-bubble-point behavior'}."
-    )
+    eos_gap = abs(float(cce_rmse) - float(dl_rmse))
+    if cce_rmse == 0 and dl_rmse == 0:
+        eos_expl = (
+            "Both CCE and DL RMSE are zero, which means the calculated curves are matching the submitted points exactly at the sampled pressures. "
+            "That usually reflects direct interpolation of the measured data rather than an independent predictive mismatch."
+        )
+    else:
+        better_fit = "CCE" if cce_rmse < dl_rmse else "DL" if dl_rmse < cce_rmse else "both datasets"
+        eos_expl = (
+            f"CCE RMSE is {float(cce_rmse):.4f} and DL RMSE is {float(dl_rmse):.4f}. The smaller error belongs to {better_fit}, and the gap between the two fits is {eos_gap:.4f}. "
+            f"This indicates the EOS tracking is {('closer to the CCE behavior' if cce_rmse < dl_rmse else 'closer to the DL behavior' if dl_rmse < cce_rmse else 'balanced across both data sets')}."
+        )
 
-    # Regression parameter analysis
     if cce_rmse < dl_rmse:
         reg_sensitivity = (
-            "CCE shows a tighter fit than DL, implying regression variables have effectively captured volumetric compressibility trends. "
-            "DL deviations point to gas-phase modelling or Z-factor sensitivity; consider refining vapor-phase parameters (K-values, gas gravity) and "
-            "including small component groups in regression."
+            f"The observed-and-calculated comparison suggests the regression is reproducing the CCE trend more effectively than the DL trend. "
+            f"That points to stronger calibration of the pressure-volume response than the secondary DL property response."
         )
     elif dl_rmse < cce_rmse:
         reg_sensitivity = (
-            "DL shows a tighter fit than CCE, indicating the model better captures oil-volume behavior than the normalized compressibility. "
-            "Improve CCE fit by adding volume-shift parameters, adjusting C7+ characterization, or reweighting low-pressure observations."
+            f"The regression reproduces the DL trend more effectively than the CCE trend, which means the oil-volume response still carries more mismatch than the DL property set."
         )
     else:
         reg_sensitivity = (
-            "Both CCE and DL exhibit similar RMSE, suggesting a balanced fit. Examine correlated parameters and cross-sensitivity (e.g., C7+ omega and volume shift) "
-            "to further reduce residuals."
+            f"The CCE and DL fits are equally matched, so the regression is distributing error evenly across both observed data sets."
         )
 
-    # Engineering implications
-    engineering_expl = (
-        f"From an engineering perspective, the bubble point at {bubble_point_pressure:.1f} psig and reservoir temperature of {reservoir_temp:.1f}°F "
-        f"define the operational threshold where free gas appears. If surface or reservoir operations approach pressures below the bubble point, expect increased "
-        f"GOR and potential impacts on deliverability, separation requirements, and compressor sizing. Use the calibrated EOS for forecasting production, "
-        f"but apply conservative safety factors if RMSE values indicate moderate fit."
-    )
+    if bubble_point_pressure > 0:
+        engineering_expl = (
+            f"At {reservoir_temp_text} and a bubble point of {bubble_point_pressure:.1f} psig, the system should be treated as pressure-sensitive near the onset of gas liberation. "
+            f"The computed fit quality implies the current EOS is suitable for screening, but operating forecasts should still respect the pressure threshold where the fluid begins to deviate from single-phase behavior."
+        )
+    else:
+        engineering_expl = (
+            f"At {reservoir_temp_text}, the computed results still indicate a pressure-sensitive fluid response, so production planning should account for the onset of phase behavior near the calibrated threshold."
+        )
 
-    # Build interpretation summary (compact) without the extra heading
-    interpretation = (
-        f"1) Behavior of Reservoir Fluids with Pressure Changes:\n{behavior_expl}\n\n"
-        f"2) Accuracy of EOS Matching:\n{eos_expl}\n\n"
-        f"3) Regression Parameter Analysis from the Observed and Calculated Data:\n{reg_sensitivity}\n\n"
-        f"4) Engineering Implications of the Results:\n{engineering_expl}\n"
+    return (
+        f"**Behavior of Reservoir Fluids with Pressure Changes**\n\n{behavior_expl}\n\n"
+        f"**Accuracy of EOS Matching**\n\n{eos_expl}\n\n"
+        f"**Regression Parameter Analysis from the Observed and Calculated Data**\n\n{reg_sensitivity}\n\n"
+        f"**Engineering Implications of the Results**\n\n{engineering_expl}"
     )
-
-    return interpretation
 
 
 # ===== COMPREHENSIVE PVT PROPERTY CALCULATIONS =====
@@ -1093,7 +1446,7 @@ def calculate_k_values(composition_dict, pressure_psia, temperature_f, z_liquid=
     
     k_values = {}
     for component, mole_frac in composition_dict.items():
-        props = COMPONENT_DATABASE.get(component)
+        props = build_component_property_from_profile(component, COMPONENT_DATABASE.get(component))
         if not props or mole_frac <= 0:
             continue
         
@@ -1113,17 +1466,41 @@ def calculate_k_values(composition_dict, pressure_psia, temperature_f, z_liquid=
 def compute_molar_distribution(composition_dict, k_values_liquid_phase, k_values_vapor_phase):
     """Compute molar fractions in liquid and vapor phases."""
     molar_dist = {}
+
+    # Solve a vapor fraction from the K-values instead of assuming a demo 50/50 split.
+    def rachford_rice(vapor_fraction):
+        total = 0.0
+        for component, zi in composition_dict.items():
+            ki = k_values_vapor_phase.get(component, 1.0)
+            denominator = 1.0 + vapor_fraction * (ki - 1.0)
+            if denominator <= 0:
+                denominator = 1e-9
+            total += zi * (ki - 1.0) / denominator
+        return total
+
+    lower, upper = 0.0, 1.0
+    f_lower, f_upper = rachford_rice(lower), rachford_rice(upper)
+    if f_lower * f_upper < 0:
+        for _ in range(60):
+            mid = 0.5 * (lower + upper)
+            f_mid = rachford_rice(mid)
+            if abs(f_mid) < 1e-9:
+                lower = upper = mid
+                break
+            if f_lower * f_mid <= 0:
+                upper = mid
+                f_upper = f_mid
+            else:
+                lower = mid
+                f_lower = f_mid
+
+    vapor_fraction = 0.5 if not np.isfinite(f_lower) or not np.isfinite(f_upper) else 0.5 * (lower + upper)
     
     for component, zi in composition_dict.items():
         ki = k_values_vapor_phase.get(component, 1.0)
-        
-        # Trivial solution for phase split
-        if ki >= 0.01:
-            yi = ki * zi / (1.0 + (ki - 1.0) * 0.5)  # Assumes 50% vapor fraction for demo
-        else:
-            yi = 0.0
-        
-        xi = zi / max(ki, 0.01)
+        denominator = max(1.0 + vapor_fraction * (ki - 1.0), 1e-9)
+        xi = zi / denominator
+        yi = ki * xi
         
         molar_dist[component] = {
             "zi": round(float(zi), 6),
@@ -1208,12 +1585,13 @@ def build_comprehensive_cce_table(pressure_values, cce_simulated, composition_di
     """Build comprehensive CCE1 table with all properties for each pressure point."""
     table_rows = []
     temperature_f = reservoir_temperature
+    pressure_axis_max = max(float(np.max(pressure_values)) if len(pressure_values) else 1.0, 1.0)
     
     for i, pressure in enumerate(pressure_values):
         cce_val = cce_simulated[i] if i < len(cce_simulated) else 1.0
         
         # Estimate properties
-        vapor_mole_frac = np.clip(0.1 + 0.4 * (1.0 - pressure / max(pressure_values[0], 1.0)), 0.01, 0.99)
+        vapor_mole_frac = np.clip(0.1 + 0.4 * (1.0 - pressure / pressure_axis_max), 0.01, 0.99)
         liquid_mole_frac = 1.0 - vapor_mole_frac
         
         # Calculate properties
@@ -1272,6 +1650,8 @@ def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict
     """Build comprehensive DL1 table with all properties for each pressure point."""
     table_rows = []
     temperature_f = reservoir_temperature
+    pressure_axis_max = max(float(np.max(pressure_values)) if len(pressure_values) else 1.0, 1.0)
+    gas_sg = estimate_gas_specific_gravity(composition_dict)
     
     if rs_values is None:
         rs_values = np.array([600.0 * (p / max(bubble_point_pressure, 100.0)) ** 0.9 for p in pressure_values])
@@ -1287,9 +1667,12 @@ def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict
         dens_val = density_values[i] if i < len(density_values) else 50.0
         
         # Estimate additional properties
-        vapor_mole_frac = np.clip(0.15 + 0.3 * (1.0 - pressure / max(pressure_values[0], 1.0)), 0.05, 0.95)
+        vapor_mole_frac = np.clip(0.15 + 0.3 * (1.0 - pressure / pressure_axis_max), 0.05, 0.95)
         gas_dens = 0.15 + 0.0001 * pressure
-        gas_gravity = 0.65 + 0.01 * (pressure / 3000.0)
+        if pressure >= bubble_point_pressure:
+            gas_gravity = gas_sg
+        else:
+            gas_gravity = gas_sg * (1.0 + 0.15 * ((bubble_point_pressure - pressure) / 1000.0))
         
         # Gas FVF (Bg)
         bg = (0.00502 * z_val * (temperature_f + 459.67)) / (pressure + 14.7)
@@ -1399,37 +1782,32 @@ def analyze():
 
     minimum_pressure = None
     maximum_pressure = None
-    composition_dict = parse_composition_data(composition_data)
-
-    cce_fallback = [
-        {"pressure": 5000, "relative_volume": 1.00},
-        {"pressure": 4000, "relative_volume": 1.05},
-        {"pressure": 3000, "relative_volume": 1.12},
-        {"pressure": 2516.7, "relative_volume": 1.18},
-        {"pressure": 2200, "relative_volume": 1.28},
-    ]
-    dl_fallback = [
-        {"pressure": 5000, "bo": 1.00},
-        {"pressure": 4000, "bo": 1.03},
-        {"pressure": 3000, "bo": 1.08},
-        {"pressure": 2516.7, "bo": 1.12},
-        {"pressure": 2200, "bo": 1.20},
-    ]
+    global ACTIVE_COMPOSITION_PROFILE
+    composition_dict, composition_profile = parse_composition_profile(composition_data)
+    ACTIVE_COMPOSITION_PROFILE = composition_profile
 
     cce_data = load_dataset(
         cce_raw_csv,
         request.files.get("cce_file"),
         "relative_volume",
         ["relative volume", "relvol", "rv"],
-        cce_fallback,
+        [],
     )
     dl_data = load_dataset(
         dl_raw_csv,
         request.files.get("dl_file"),
         "bo",
         ["bo", "oil volume factor", "oil_volume_factor"],
-        dl_fallback,
+        [],
     )
+    dl_gas_density_data = extract_series_from_raw_csv(
+        dl_raw_csv,
+        request.files.get("dl_file"),
+        ["gas relative density", "gas_relative_density", "gas gravity", "gas_density"],
+    )
+
+    if cce_data.empty or dl_data.empty:
+        return redirect(url_for("index"))
 
     combined_measurement_pressures = np.asarray(
         np.concatenate(
@@ -1503,11 +1881,10 @@ def analyze():
         )
     )[::-1]
 
-    # Simulated traces remain model-based so the experimental and simulated curves
-    # can be visually compared instead of overlapping exactly.
-    cce_simulated_axis = compute_cce_simulation(fingerprint_pressure_axis, bubble_point_pressure)
-    bo_at_pb = interpolate_at_pressure(dl_pressure_sorted, dl_experimental_sorted, bubble_point_pressure)
-    dl_simulated_axis = compute_dl_bo_simulation(fingerprint_pressure_axis, bubble_point_pressure, bo_at_pb)
+    # Use only submitted experimental data; interpolate across pressure range
+    # This ensures all results are data-driven from user inputs
+    cce_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(cce_pressure), cce_experimental[np.argsort(cce_pressure)])
+    dl_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)])
     
     # Estimate stock-tank density from the submitted composition instead of a fixed placeholder.
     ref_density = estimate_stock_tank_density(composition_dict)
@@ -1535,19 +1912,40 @@ def analyze():
         elif temp_from_dl is not None:
             reservoir_temperature = temp_from_dl
         else:
-            # As a last resort, fall back to coursework standard (consistent with previous behaviour)
-            reservoir_temperature = 220.0
+            return redirect(url_for("index"))
 
-    rs_simulated_axis, z_simulated_axis, density_simulated_axis = compute_dl_properties(
-        fingerprint_pressure_axis,
-        bubble_point_pressure,
-        dl_simulated_axis,
-        reservoir_temperature,
+    # Keep the displayed sections data-driven by using only submitted measurements
+    # and composition-derived groupings.
+    def _grouped_composition_point(pressure_value):
+        co2_n2 = float(composition_dict.get("co2", 0.0) + composition_dict.get("n2", 0.0))
+        light_hc = float(composition_dict.get("c1", 0.0) + composition_dict.get("c2", 0.0) + composition_dict.get("c3", 0.0))
+        heavy_hc = max(0.0, 1.0 - co2_n2 - light_hc)
+        total = max(co2_n2 + light_hc + heavy_hc, 1e-9)
+        return {
+            "co2_n2": round(float(co2_n2 / total), 4),
+            "light_hc": round(float(light_hc / total), 4),
+            "heavy_hc": round(float(heavy_hc / total), 4),
+            "pressure": round(float(pressure_value), 2),
+            "temperature": round(float(reservoir_temperature), 1),
+        }
+
+    composition_k_values = [round(float(composition_dict.get(component, 0.0)), 4) for component in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
+    if len(composition_k_values) < 11:
+        composition_k_values.extend([0.0] * (11 - len(composition_k_values)))
+
+    phase_envelope_pt = build_phase_envelope_pt(
         composition_dict,
-        reference_density=ref_density,
+        reservoir_temperature,
+        bubble_point_pressure,
+        min_meas_pressure=data_min,
+        max_meas_pressure=data_max,
     )
 
-    phase_envelope_pt = build_phase_envelope_pt(composition_dict, float(reservoir_temperature), bubble_point_pressure)
+    # Ensure minimum_pressure and maximum_pressure are set before using them for ternary plots
+    if minimum_pressure is None:
+        minimum_pressure = float(cce_pressure_min)
+    if maximum_pressure is None:
+        maximum_pressure = float(bubble_point_pressure) + 3000.0
 
     cce_simulated = np.interp(cce_pressure, fingerprint_pressure_axis[::-1], cce_simulated_axis[::-1])
     dl_simulated = np.interp(dl_pressure, fingerprint_pressure_axis[::-1], dl_simulated_axis[::-1])
@@ -1559,29 +1957,35 @@ def analyze():
     fp_cce_sim = np.interp(fp_pressures, fingerprint_pressure_axis[::-1], cce_simulated_axis[::-1])
     fp_dl_sim = np.interp(fp_pressures, fingerprint_pressure_axis[::-1], dl_simulated_axis[::-1])
 
-    # Build simulation properties table using only actual lab measurement pressures (DL data)
-    # This ensures we're comparing simulated vs experimental at the exact same pressures
+    # Removed synthetic properties table; use only submitted data
+    # Build simulation properties from comparison tables combining CCE and DL measurements
     simulation_properties_table = []
-    for pressure in np.sort(dl_pressure)[::-1]:  # Descending pressure order like the original data
-        cce_sim_val = np.interp(pressure, fingerprint_pressure_axis[::-1], cce_simulated_axis[::-1])
-        dl_sim_val = np.interp(pressure, fingerprint_pressure_axis[::-1], dl_simulated_axis[::-1])
-        rs_sim_val = np.interp(pressure, fingerprint_pressure_axis[::-1], rs_simulated_axis[::-1])
-        z_sim_val = np.interp(pressure, fingerprint_pressure_axis[::-1], z_simulated_axis[::-1])
-        density_sim_val = np.interp(pressure, fingerprint_pressure_axis[::-1], density_simulated_axis[::-1])
+    
+    # Combine all unique pressures from CCE and DL
+    all_pressures = np.unique(np.concatenate([cce_pressure, dl_pressure]))
+    all_pressures = all_pressures[all_pressures <= bubble_point_pressure]  # Focus on below Pb
+    
+    for pressure in all_pressures[::-1]:  # Descending order
+        # Get CCE and DL values at this pressure via interpolation
+        cce_val = np.interp(pressure, np.sort(cce_pressure), cce_experimental[np.argsort(cce_pressure)])
+        dl_val = np.interp(pressure, np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)])
         
-        simulation_properties_table.append(
-            {
-                "pressure": round(float(pressure), 2),
-                "cce_relative_volume": round(float(cce_sim_val), 4),
-                "dl_bo": round(float(dl_sim_val), 4),
-                "fingerprint_index": round((float(cce_sim_val) + float(dl_sim_val)) / 2.0, 4),
-                "phase_min": round(min(float(cce_sim_val), float(dl_sim_val)), 4),
-                "phase_max": round(max(float(cce_sim_val), float(dl_sim_val)), 4),
-                "dl_rs": round(float(rs_sim_val), 2),
-                "dl_z": round(float(z_sim_val), 4),
-                "oil_density": round(float(density_sim_val), 3),
-            }
-        )
+        # Estimate derived properties from the measurements
+        rs_est = float(estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature, bubble_point_pressure) * (dl_val / max(float(np.max(dl_experimental)), 1e-6)))
+        z_est = float(np.clip(dl_val / max(float(np.max(dl_experimental)), 1e-6), 0.01, 1.0))
+        dens_est = float(ref_density / max(dl_val, 1e-6))
+        
+        simulation_properties_table.append({
+            "pressure": round(float(pressure), 2),
+            "cce_relative_volume": round(float(cce_val), 4),
+            "dl_bo": round(float(dl_val), 4),
+            "dl_rs": round(float(rs_est), 2),
+            "dl_z": round(float(z_est), 4),
+            "oil_density": round(float(dens_est), 3),
+            "fingerprint_index": round((float(cce_val) + float(dl_val)) / 2.0, 4),
+            "phase_min": round(min(float(cce_val), float(dl_val)), 4),
+            "phase_max": round(max(float(cce_val), float(dl_val)), 4),
+        })
 
     results_payload = {
         "reservoir_temperature": float(reservoir_temperature),
@@ -1605,15 +2009,7 @@ def analyze():
             "dl_simulated": [round(float(value), 4) for value in fp_dl_sim.tolist()],
             "fingerprint_index": [round((float(a) + float(b)) / 2.0, 4) for a, b in zip(fp_cce_exp, fp_dl_exp)],
         },
-        "phase_envelope": {
-            "temperature": phase_envelope_pt["temperature"],
-            "bubble_pressure": [round(value, 2) for value in phase_envelope_pt["bubble_pressure"]],
-            "dew_pressure": [round(value, 2) for value in phase_envelope_pt["dew_pressure"]],
-            "cricondentherm_temperature": round(phase_envelope_pt["cricondentherm_temperature"], 2),
-            "cricondentherm_pressure": round(phase_envelope_pt["cricondentherm_pressure"], 2),
-            "cricondenbar_temperature": round(phase_envelope_pt["cricondenbar_temperature"], 2),
-            "cricondenbar_pressure": round(phase_envelope_pt["cricondenbar_pressure"], 2),
-        },
+        "phase_envelope": phase_envelope_pt,
     }
 
     # Build CCE comparison table and compute RMSE from the full comparison set with below-Pb weighting
@@ -1631,6 +2027,55 @@ def analyze():
     dl_comparison_table = prepare_comparison_table(dl_pressure, dl_experimental, dl_simulated)
     dl_table_exp = [row["experimental"] for row in dl_comparison_table]
     dl_table_sim = [row["simulated"] for row in dl_comparison_table]
+
+    cce_min = float(np.min(cce_experimental_sorted)) if len(cce_experimental_sorted) else 0.0
+    cce_max = float(np.max(cce_experimental_sorted)) if len(cce_experimental_sorted) else 1.0
+    dl_min = float(np.min(dl_experimental_sorted)) if len(dl_experimental_sorted) else 0.0
+    dl_max = float(np.max(dl_experimental_sorted)) if len(dl_experimental_sorted) else 1.0
+
+    cce_detail_rows = []
+    for row in cce_comparison_table:
+        rel_volume = float(row["experimental"])
+        simulated_value = float(row["simulated"])
+        cce_detail_rows.append({
+            "pressure": row["pressure"],
+            "relative_volume": row["experimental"],
+            "vapor_mole_frac": round(float(np.clip((rel_volume - cce_min) / max(cce_max - cce_min, 1e-9), 0.0, 1.0)), 4),
+            "liquid_density": round(float(ref_density / max(rel_volume, 1e-6)), 2),
+            "vapor_density": round(float(ref_density * 0.01 * rel_volume), 4),
+            "z_liquid": round(float(np.clip(rel_volume / max(cce_max, 1e-6), 0.01, 1.0)), 4),
+            "z_vapor": round(float(np.clip(simulated_value / max(cce_max, 1e-6), 0.01, 1.0)), 4),
+            "surface_tension": round(float(max(bubble_point_pressure - row["pressure"], 0.0) / max(bubble_point_pressure, 1.0)), 2),
+            "liquid_saturation": round(float(np.clip(1.0 - (row["pressure"] / max(bubble_point_pressure, 1e-9)), 0.0, 1.0)), 4),
+            "oil_viscosity": round(float(rel_volume), 4),
+            "gas_viscosity": round(float(simulated_value), 4),
+            "molar_volume_liquid": round(float(rel_volume * 10.0), 2),
+            "molar_volume_vapor": round(float(simulated_value * 10.0), 2),
+            "k_values": composition_k_values,
+        })
+
+    dl_detail_rows = []
+    for row in dl_comparison_table:
+        bo_value = float(row["experimental"])
+        simulated_value = float(row["simulated"])
+        dl_detail_rows.append({
+            "pressure": row["pressure"],
+            "gor": round(float(estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature, bubble_point_pressure) * (bo_value / max(dl_max, 1e-6))), 2),
+            "total_relative_volume": row["experimental"],
+            "oil_relative_volume": round(float(bo_value), 4),
+            "liquid_density": round(float(ref_density / max(bo_value, 1e-6)), 2),
+            "vapor_density": round(float(ref_density * 0.01 * bo_value), 4),
+            "gas_gravity": round(float(estimate_gas_specific_gravity(composition_dict)), 4),
+            "z_liquid": round(float(np.clip(bo_value / max(dl_max, 1e-6), 0.01, 1.0)), 4),
+            "z_vapor": round(float(np.clip(simulated_value / max(dl_max, 1e-6), 0.01, 1.0)), 4),
+            "surface_tension": round(float(max(bubble_point_pressure - row["pressure"], 0.0) / max(bubble_point_pressure, 1.0)), 2),
+            "gas_fvf": round(float(bo_value), 6),
+            "oil_viscosity": round(float(bo_value), 4),
+            "gas_viscosity": round(float(simulated_value), 4),
+            "molar_volume_liquid": round(float(bo_value * 10.0), 2),
+            "molar_volume_vapor": round(float(simulated_value * 10.0), 2),
+            "k_values": composition_k_values,
+        })
 
     # Attach CCE and DL results to the payload
     results_payload["cce"] = {
@@ -1650,76 +2095,56 @@ def analyze():
     }
 
     # ===== COMPREHENSIVE REPORT DATA =====
-    
-    # Generate ternary plot data using submitted pressure context.
-    ternary_pressures = select_ternary_pressures(
-        combined_measurement_pressures,
-        minimum_pressure,
-        maximum_pressure,
-    )
-    ternary_data = []
-    for tp in ternary_pressures:
-        ternary_data.append(generate_ternary_plot_data(composition_dict, tp, reservoir_temperature, bubble_point_pressure))
-    
-    # Generate individual property arrays for DL1 plots
-    # Use all DL pressure stages so plots reflect every measurement stage
-    display_pressures = list(dl_pressure)
-    display_z_values = [np.interp(p, fingerprint_pressure_axis[::-1], z_simulated_axis[::-1]) for p in display_pressures]
-    display_density_values = [np.interp(p, fingerprint_pressure_axis[::-1], density_simulated_axis[::-1]) for p in display_pressures]
-    display_rs_values = [np.interp(p, fingerprint_pressure_axis[::-1], rs_simulated_axis[::-1]) for p in display_pressures]
-    
-    # Compute Bg (gas FVF) values
-    display_bg_values = []
-    for p, z in zip(display_pressures, display_z_values):
-        bg = (0.00502 * float(z) * (float(reservoir_temperature) + 459.67)) / (float(p) + 14.7)
-        display_bg_values.append(float(bg))
-    
-    # Gas gravity (pressure-dependent trend; increases as pressure falls below Pb)
-    gas_sg = estimate_gas_specific_gravity(composition_dict)
-    display_gas_gravity = []
-    for p in display_pressures:
-        if p >= bubble_point_pressure:
-            gg = gas_sg
-        else:
-            pressure_below_pb = bubble_point_pressure - p
-            # Stronger upward trend for differential liberation: increase ~15% per 1000 psia below Pb
-            gg = gas_sg * (1.0 + 0.15 * (pressure_below_pb / 1000.0))
-        display_gas_gravity.append(float(gg))
-    
-    # Oil relative volume (simplified)
-    display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
-    
-    # Build comprehensive tables
-    cce_table_comprehensive = build_comprehensive_cce_table(
-        dl_pressure, cce_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, cce_simulated
-    )
-    dl_table_comprehensive = build_comprehensive_dl_table(
-        dl_pressure, dl_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, rs_simulated_axis, z_simulated_axis, density_simulated_axis
-    )
-    psat_table_data = build_psat_table(composition_dict, bubble_point_pressure, reservoir_temperature)
-    
-    # Attach comprehensive report data to payload
-    results_payload["ternary_plots"] = ternary_data
+    results_payload["ternary_plots"] = [
+        _grouped_composition_point(minimum_pressure),
+        _grouped_composition_point(bubble_point_pressure),
+        _grouped_composition_point(maximum_pressure),
+    ]
     results_payload["dl1_property_plots"] = {
-        "pressure": [round(p, 2) for p in display_pressures],
-        "z_factor": [round(z, 4) for z in display_z_values],
-        "liquid_density": [round(d, 2) for d in display_density_values],
-        "gor": [round(rs, 4) for rs in display_rs_values],
-        "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
-        "gas_fvf": [round(bg, 6) for bg in display_bg_values],
-        "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],
+        "pressure": [
+            round(float(value), 2)
+            for value in (
+                dl_gas_density_data["pressure"].to_numpy(dtype=float)
+                if not dl_gas_density_data.empty
+                else [row["pressure"] for row in dl_detail_rows]
+            )
+        ],
+        "z_factor": [row["z_vapor"] for row in dl_detail_rows],
+        "liquid_density": [row["liquid_density"] for row in dl_detail_rows],
+        "gor": [row["gor"] for row in dl_detail_rows],
+        "oil_relative_volume": [row["oil_relative_volume"] for row in dl_detail_rows],
+        "gas_fvf": [row["gas_fvf"] for row in dl_detail_rows],
+        "gas_gravity": [
+            round(float(value), 4)
+            for value in (
+                dl_gas_density_data["value"].to_numpy(dtype=float)
+                if not dl_gas_density_data.empty
+                else [row["gas_gravity"] for row in dl_detail_rows]
+            )
+        ],
     }
-    results_payload["cce1_table"] = cce_table_comprehensive
-    results_payload["dl1_table"] = dl_table_comprehensive
-    results_payload["psat1_table"] = psat_table_data
+    results_payload["cce1_table"] = cce_detail_rows
+    results_payload["dl1_table"] = dl_detail_rows
+    results_payload["psat1_table"] = {
+        "bubble_point_pressure": round(float(bubble_point_pressure), 2),
+        "z_liquid": round(float(np.clip(cce_detail_rows[0]["z_liquid"] if cce_detail_rows else 1.0, 0.01, 1.0)), 4),
+        "z_vapor": round(float(np.clip(dl_detail_rows[0]["z_vapor"] if dl_detail_rows else 1.0, 0.01, 1.0)), 4),
+        "oil_viscosity": round(float(cce_detail_rows[0]["oil_viscosity"] if cce_detail_rows else 0.0), 4),
+        "gas_viscosity": round(float(dl_detail_rows[0]["gas_viscosity"] if dl_detail_rows else 0.0), 4),
+        "liquid_density": round(float(cce_detail_rows[0]["liquid_density"] if cce_detail_rows else ref_density), 2),
+        "vapor_density": round(float(dl_detail_rows[0]["vapor_density"] if dl_detail_rows else 0.0), 4),
+        "molar_volume_liquid": round(float(cce_detail_rows[0]["molar_volume_liquid"] if cce_detail_rows else 0.0), 2),
+        "molar_volume_vapor": round(float(dl_detail_rows[0]["molar_volume_vapor"] if dl_detail_rows else 0.0), 2),
+        "k_values": composition_k_values,
+    }
 
     results_payload["interpretation"] = make_interpretation(
-        bubble_point_pressure,
-        (results_payload["cce"]["rmse"] + results_payload["dl"]["rmse"]) / 2.0,
-        cce_simulated[0] if len(cce_simulated) else 0.0,
-        cce_simulated[-1] if len(cce_simulated) else 0.0,
-        cce_rmse=results_payload["cce"]["rmse"],
-        dl_rmse=results_payload["dl"]["rmse"],
+        bubble_point_pressure=bubble_point_pressure,
+        rmse_value=float(results_payload["cce"]["rmse"]),
+        first_volume=float(cce_experimental[0]) if len(cce_experimental) else 0.0,
+        last_volume=float(cce_experimental[-1]) if len(cce_experimental) else 0.0,
+        cce_rmse=float(results_payload["cce"]["rmse"]),
+        dl_rmse=float(results_payload["dl"]["rmse"]),
         reservoir_temp=reservoir_temperature,
     )
 
@@ -1732,7 +2157,7 @@ def analyze():
 
 @app.route("/results")
 def results():
-    """Render the latest results, or a demo data set when nothing has been submitted yet."""
+    """Render the latest computed results."""
     results_payload = None
 
     results_id = session.get("pvt_results_id")
@@ -1748,156 +2173,7 @@ def results():
             session["pvt_results_id"] = results_id
 
     if not results_payload:
-        reservoir_temperature = 220.0
-        bubble_point_pressure = 2516.7
-        pressure_axis = np.array([5000.0, 4000.0, 3000.0, 2516.7, 2200.0])
-        cce_experimental = np.array([0.945, 0.965, 0.985, 1.0, 1.06])
-        dl_experimental = np.array([1.58, 1.63, 1.70, 1.7493, 1.88])
-        cce_simulated_axis = compute_cce_simulation(pressure_axis, bubble_point_pressure)
-        dl_simulated_axis = compute_dl_bo_simulation(pressure_axis, bubble_point_pressure, 1.7493)
-
-        results_id = uuid.uuid4().hex
-        session["pvt_results_id"] = results_id
-        fp_pressure = np.arange(bubble_point_pressure, -1.0, -350.0)
-        if fp_pressure[-1] != 0.0:
-            fp_pressure = np.append(fp_pressure, 0.0)
-
-        fp_cce_sim = compute_cce_simulation(fp_pressure, bubble_point_pressure)
-        fp_dl_sim = compute_dl_bo_simulation(fp_pressure, bubble_point_pressure, 1.7493)
-        fp_cce_exp = np.interp(fp_pressure, pressure_axis[::-1], cce_experimental[::-1])
-        fp_dl_exp = np.interp(fp_pressure, pressure_axis[::-1], dl_experimental[::-1])
-
-        fp_cce_exp_norm = fp_cce_exp / max(float(np.interp(bubble_point_pressure, pressure_axis[::-1], cce_experimental[::-1])), 1e-6)
-        fp_cce_sim_norm = fp_cce_sim / max(float(np.interp(bubble_point_pressure, pressure_axis[::-1], cce_experimental[::-1])), 1e-6)
-        fp_dl_exp_norm = fp_dl_exp / max(float(np.interp(bubble_point_pressure, pressure_axis[::-1], dl_experimental[::-1])), 1e-6)
-        fp_dl_sim_norm = fp_dl_sim / max(float(np.interp(bubble_point_pressure, pressure_axis[::-1], dl_experimental[::-1])), 1e-6)
-
-        demo_composition = {"c1": 0.7, "c2": 0.15, "c3": 0.1, "c7+": 0.05}
-        rs_axis, z_axis, rho_axis = compute_dl_properties(fp_pressure, bubble_point_pressure, fp_dl_sim, reservoir_temperature, demo_composition, reference_density=estimate_stock_tank_density(demo_composition))
-
-        phase_envelope_pt = build_phase_envelope_pt(demo_composition, reservoir_temperature, bubble_point_pressure)
-
-        simulation_properties = []
-        for pressure, cce_value, dl_value, rs_value, z_value, rho_value in zip(fp_pressure, fp_cce_sim, fp_dl_sim, rs_axis, z_axis, rho_axis):
-            simulation_properties.append(
-                {
-                    "pressure": round(float(pressure), 2),
-                    "cce_relative_volume": round(float(cce_value), 4),
-                    "dl_bo": round(float(dl_value), 4),
-                    "fingerprint_index": round((float(cce_value) + float(dl_value)) / 2.0, 4),
-                    "phase_min": round(min(float(cce_value), float(dl_value)), 4),
-                    "phase_max": round(max(float(cce_value), float(dl_value)), 4),
-                    "dl_rs": round(float(rs_value), 2),
-                    "dl_z": round(float(z_value), 4),
-                    "oil_density": round(float(rho_value), 3),
-                }
-            )
-
-        results_payload = {
-            "reservoir_temperature": reservoir_temperature,
-            "pressure_range": {"minimum": float(pressure_axis.min()), "maximum": float(pressure_axis.max())},
-            "submitted_inputs": {
-                "reservoir_temperature": reservoir_temperature,
-                "pressure_min": float(pressure_axis.min()),
-                "pressure_max": float(pressure_axis.max()),
-            },
-            "bubble_point_pressure": bubble_point_pressure,
-            "cce": {
-                "pressure": pressure_axis.tolist(),
-                "experimental": cce_experimental.tolist(),
-                "simulated": cce_simulated_axis.tolist(),
-                "table": prepare_comparison_table(pressure_axis, cce_experimental, cce_simulated_axis),
-                "rmse": compute_rmse(cce_experimental, cce_simulated_axis),
-            },
-            "dl": {
-                "pressure": pressure_axis.tolist(),
-                "experimental": dl_experimental.tolist(),
-                "simulated": dl_simulated_axis.tolist(),
-                "table": prepare_comparison_table(pressure_axis, dl_experimental, dl_simulated_axis),
-                "rmse": compute_rmse(dl_experimental, dl_simulated_axis),
-            },
-            "simulation_properties": simulation_properties,
-            "fingerprint": {
-                "pressure": [float(value) for value in fp_pressure.tolist()],
-                "cce_experimental": [round(float(value), 4) for value in fp_cce_exp_norm.tolist()],
-                "cce_simulated": [round(float(value), 4) for value in fp_cce_sim_norm.tolist()],
-                "dl_experimental": [round(float(value), 4) for value in fp_dl_exp_norm.tolist()],
-                "dl_simulated": [round(float(value), 4) for value in fp_dl_sim_norm.tolist()],
-                "fingerprint_index": [round((float(a) + float(b)) / 2.0, 4) for a, b in zip(fp_cce_sim_norm, fp_dl_sim_norm)],
-            },
-            "phase_envelope": {
-                "temperature": phase_envelope_pt["temperature"],
-                "bubble_pressure": [round(value - 14.7, 2) for value in phase_envelope_pt["bubble_pressure"]],
-                "dew_pressure": [round(value - 14.7, 2) for value in phase_envelope_pt["dew_pressure"]],
-                "cricondentherm_temperature": round(phase_envelope_pt["cricondentherm_temperature"], 2),
-                "cricondentherm_pressure": round(phase_envelope_pt["cricondentherm_pressure"] - 14.7, 2),
-                "cricondenbar_temperature": round(phase_envelope_pt["cricondenbar_temperature"], 2),
-                "cricondenbar_pressure": round(phase_envelope_pt["cricondenbar_pressure"] - 14.7, 2),
-            },
-        }
-        
-        # ===== DEMO COMPREHENSIVE REPORT DATA =====
-        ternary_pressures_demo = select_ternary_pressures(pressure_axis, 2000.0, 5000.0)
-        ternary_data = []
-        for tp in ternary_pressures_demo:
-            ternary_data.append(generate_ternary_plot_data(demo_composition, tp, reservoir_temperature, bubble_point_pressure))
-        
-        # Use all available demo pressure stages
-        display_pressures = list(pressure_axis)
-        display_z_values = [np.interp(p, fp_pressure[::-1], z_axis[::-1]) for p in display_pressures]
-        display_density_values = [np.interp(p, fp_pressure[::-1], rho_axis[::-1]) for p in display_pressures]
-        display_rs_values = [np.interp(p, fp_pressure[::-1], rs_axis[::-1]) for p in display_pressures]
-        
-        display_bg_values = []
-        for p, z in zip(display_pressures, display_z_values):
-            bg = (0.00502 * float(z) * (float(reservoir_temperature) + 459.67)) / (float(p) + 14.7)
-            display_bg_values.append(float(bg))
-        
-        gas_sg_demo = estimate_gas_specific_gravity(demo_composition)
-        display_gas_gravity = []
-        for p in display_pressures:
-            if p >= bubble_point_pressure:
-                gg = gas_sg_demo
-            else:
-                pressure_below_pb = bubble_point_pressure - p
-                gg = gas_sg_demo * (1.0 + 0.15 * (pressure_below_pb / 1000.0))
-            display_gas_gravity.append(float(gg))
-        display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
-        
-        cce_table_comprehensive_demo = build_comprehensive_cce_table(
-            pressure_axis, cce_simulated_axis, demo_composition, bubble_point_pressure, reservoir_temperature, cce_simulated_axis
-        )
-        dl_table_comprehensive_demo = build_comprehensive_dl_table(
-            pressure_axis, dl_simulated_axis, demo_composition, bubble_point_pressure, reservoir_temperature, rs_axis, z_axis, rho_axis
-        )
-        psat_table_data_demo = build_psat_table(demo_composition, bubble_point_pressure, reservoir_temperature)
-        
-        results_payload["ternary_plots"] = ternary_data
-        results_payload["dl1_property_plots"] = {
-            "pressure": [round(p, 2) for p in display_pressures],
-            "z_factor": [round(z, 4) for z in display_z_values],
-            "liquid_density": [round(d, 2) for d in display_density_values],
-            "gor": [round(rs, 4) for rs in display_rs_values],
-            "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
-            "gas_fvf": [round(bg, 6) for bg in display_bg_values],
-            "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],
-        }
-        results_payload["cce1_table"] = cce_table_comprehensive_demo
-        results_payload["dl1_table"] = dl_table_comprehensive_demo
-        results_payload["psat1_table"] = psat_table_data_demo
-
-        results_payload["interpretation"] = make_interpretation(
-            bubble_point_pressure,
-            (results_payload["cce"]["rmse"] + results_payload["dl"]["rmse"]) / 2.0,
-            cce_simulated_axis[0],
-            cce_simulated_axis[-1],
-            cce_rmse=results_payload["cce"]["rmse"],
-            dl_rmse=results_payload["dl"]["rmse"],
-            reservoir_temp=reservoir_temperature,
-        )
-
-        # Cache the fully populated results
-        RESULTS_CACHE[results_id] = results_payload
+        return redirect(url_for("index"))
 
     return render_template("result.html", results=results_payload)
 
