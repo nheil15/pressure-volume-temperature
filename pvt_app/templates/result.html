@@ -9,6 +9,9 @@
 {% endblock %}
 
 {% block content %}
+<!-- JSON data for JavaScript initialization -->
+<script type="application/json" id="pvt-result-data">{{ results | tojson }}</script>
+
 <div class="row g-4">
     <div class="col-12">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
@@ -94,6 +97,20 @@
                 </div>
                 <div class="chart-wrap">
                     <div id="fingerprintChart" aria-label="Fingerprint plot" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Bubble Point Graph</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('bubblePointChart', 'Bubble_Point_Graph')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="bubblePointChart" aria-label="Bubble point graph" role="img"></div>
                 </div>
             </div>
         </div>
@@ -219,9 +236,334 @@
             </div>
         </div>
     </div>
-</div>
 
-<script type="application/json" id="pvt-result-data">{{ results | tojson }}</script>
+    <!-- ===== TERNARY PLOTS (Figures 3-5) ===== -->
+    <div class="col-12">
+        <h3 class="mb-4 text-dark fw-bold">
+            <i class="fas fa-cube me-2"></i>Ternary Diagrams (at T=220°F)
+        </h3>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 border-primary-subtle">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h5 class="card-title text-primary mb-1">Figure 3</h5>
+                        <p class="text-muted small mb-0">Ternary Plot at 2000 psi</p>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" title="Save as PNG" onclick="savePNG('ternaryChart1', 'Ternary_2000psi')">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </div>
+                <div class="chart-wrap flex-grow-1">
+                    <div id="ternaryChart1" aria-label="Ternary plot 2000 psi" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 border-info-subtle">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h5 class="card-title text-info mb-1">Figure 4</h5>
+                        <p class="text-muted small mb-0">Ternary Plot at 4000 psi</p>
+                    </div>
+                    <button class="btn btn-sm btn-outline-info" title="Save as PNG" onclick="savePNG('ternaryChart2', 'Ternary_4000psi')">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </div>
+                <div class="chart-wrap flex-grow-1">
+                    <div id="ternaryChart2" aria-label="Ternary plot 4000 psi" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-4 mb-4">
+        <div class="card shadow-sm h-100 border-success-subtle">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h5 class="card-title text-success mb-1">Figure 5</h5>
+                        <p class="text-muted small mb-0">Ternary Plot at 6000 psi</p>
+                    </div>
+                    <button class="btn btn-sm btn-outline-success" title="Save as PNG" onclick="savePNG('ternaryChart3', 'Ternary_6000psi')">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </div>
+                <div class="chart-wrap flex-grow-1">
+                    <div id="ternaryChart3" aria-label="Ternary plot 6000 psi" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== DL1 PROPERTY PLOTS (Figures 6-12) ===== -->
+    <div class="col-12">
+        <h3 class="mb-3">DL1 Property Plots</h3>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 6: CCE Relative Volume</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('cceRelVolChart', 'CCE_Relative_Volume')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="cceRelVolChart" aria-label="CCE relative volume" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 7: DL Vapor Z-Factor</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlZFactorChart', 'DL_Z_Factor')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlZFactorChart" aria-label="DL Z-factor" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 8: DL Liquid Density</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlDensityChart', 'DL_Liquid_Density')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlDensityChart" aria-label="DL liquid density" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 9: DL Gas-Oil Ratio (GOR)</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlGORChart', 'DL_GOR')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlGORChart" aria-label="DL GOR" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 10: DL Oil Relative Volume</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlOilRelVolChart', 'DL_Oil_RelVol')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlOilRelVolChart" aria-label="DL oil relative volume" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 11: DL Gas FVF</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlGasFVFChart', 'DL_Gas_FVF')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlGasFVFChart" aria-label="DL gas FVF" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Figure 12: DL Gas Gravity</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="savePNG('dlGasGravityChart', 'DL_Gas_Gravity')">Save</button>
+                </div>
+                <div class="chart-wrap">
+                    <div id="dlGasGravityChart" aria-label="DL gas gravity" role="img"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== COMPREHENSIVE TABLES ===== -->
+    <div class="col-12">
+        <h3 class="mb-3 mt-4">Comprehensive PVT Data Tables</h3>
+    </div>
+
+    <!-- CCE1 Table -->
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">CCE1 (Constant Composition Expansion) Table</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="saveTableCSV('cce1TableContainer', 'CCE1_Table')">Save</button>
+                </div>
+                <div class="table-responsive" id="cce1TableContainer" style="max-height: 600px; overflow-y: auto;">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="position-sticky" style="top: 0; background: white; z-index: 10;">
+                            <tr>
+                                <th>Pressure (psi)</th>
+                                <th>Rel Vol</th>
+                                <th>Vapor Mole %</th>
+                                <th>Liq Dens (lb/ft³)</th>
+                                <th>Vap Dens (lb/ft³)</th>
+                                <th>Z Liq</th>
+                                <th>Z Vap</th>
+                                <th>Surface Tension (dynes/cm)</th>
+                                <th>Liquid Sat</th>
+                                <th>Oil Visc (cP)</th>
+                                <th>Gas Visc (cP)</th>
+                                <th>Mol Vol Liq (cm³/mol)</th>
+                                <th>Mol Vol Vap (cm³/mol)</th>
+                                <th>K-CO₂</th><th>K-N₂</th><th>K-C1</th><th>K-C2</th><th>K-C3</th><th>K-iC4</th><th>K-nC4</th><th>K-iC5</th><th>K-nC5</th><th>K-C6</th><th>K-C7+</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results.cce1_table %}
+                            <tr>
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.relative_volume }}</td>
+                                <td>{{ row.vapor_mole_frac }}</td>
+                                <td>{{ row.liquid_density }}</td>
+                                <td>{{ row.vapor_density }}</td>
+                                <td>{{ row.z_liquid }}</td>
+                                <td>{{ row.z_vapor }}</td>
+                                <td>{{ row.surface_tension }}</td>
+                                <td>{{ row.liquid_saturation }}</td>
+                                <td>{{ row.oil_viscosity }}</td>
+                                <td>{{ row.gas_viscosity }}</td>
+                                <td>{{ row.molar_volume_liquid }}</td>
+                                <td>{{ row.molar_volume_vapor }}</td>
+                                {% for k in row.k_values %}<td>{{ k }}</td>{% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DL1 Table -->
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">DL1 (Differential Liberation) Table</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="saveTableCSV('dl1TableContainer', 'DL1_Table')">Save</button>
+                </div>
+                <div class="table-responsive" id="dl1TableContainer" style="max-height: 600px; overflow-y: auto;">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="position-sticky" style="top: 0; background: white; z-index: 10;">
+                            <tr>
+                                <th>Pressure (psi)</th>
+                                <th>GOR (scf/stb)</th>
+                                <th>Total Rel Vol</th>
+                                <th>Oil Rel Vol</th>
+                                <th>Liq Dens (lb/ft³)</th>
+                                <th>Vap Dens (lb/ft³)</th>
+                                <th>Gas Gravity</th>
+                                <th>Z Liq</th>
+                                <th>Z Vap</th>
+                                <th>Surface Tension (dynes/cm)</th>
+                                <th>Gas FVF (rb/Mscf)</th>
+                                <th>Oil Visc (cP)</th>
+                                <th>Gas Visc (cP)</th>
+                                <th>Mol Vol Liq (cm³/mol)</th>
+                                <th>Mol Vol Vap (cm³/mol)</th>
+                                <th>K-CO₂</th><th>K-N₂</th><th>K-C1</th><th>K-C2</th><th>K-C3</th><th>K-iC4</th><th>K-nC4</th><th>K-iC5</th><th>K-nC5</th><th>K-C6</th><th>K-C7+</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in results.dl1_table %}
+                            <tr>
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.gor }}</td>
+                                <td>{{ row.total_relative_volume }}</td>
+                                <td>{{ row.oil_relative_volume }}</td>
+                                <td>{{ row.liquid_density }}</td>
+                                <td>{{ row.vapor_density }}</td>
+                                <td>{{ row.gas_gravity }}</td>
+                                <td>{{ row.z_liquid }}</td>
+                                <td>{{ row.z_vapor }}</td>
+                                <td>{{ row.surface_tension }}</td>
+                                <td>{{ row.gas_fvf }}</td>
+                                <td>{{ row.oil_viscosity }}</td>
+                                <td>{{ row.gas_viscosity }}</td>
+                                <td>{{ row.molar_volume_liquid }}</td>
+                                <td>{{ row.molar_volume_vapor }}</td>
+                                {% for k in row.k_values %}<td>{{ k }}</td>{% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PSAT1 Table -->
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">PSAT1 (Saturation Pressure) Table</h2>
+                    <button class="btn btn-sm btn-outline-primary" onclick="saveTableCSV('psat1TableContainer', 'PSAT1_Table')">Save</button>
+                </div>
+                <div class="table-responsive" id="psat1TableContainer">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Bubble Point Pressure (psi)</th>
+                                <th>Z Liquid</th>
+                                <th>Z Vapor</th>
+                                <th>Oil Viscosity (cP)</th>
+                                <th>Gas Viscosity (cP)</th>
+                                <th>Liquid Density (lb/ft³)</th>
+                                <th>Vapor Density (lb/ft³)</th>
+                                <th>Mol Vol Liq (cm³/mol)</th>
+                                <th>Mol Vol Vap (cm³/mol)</th>
+                                <th>K-CO₂</th><th>K-N₂</th><th>K-C1</th><th>K-C2</th><th>K-C3</th><th>K-iC4</th><th>K-nC4</th><th>K-iC5</th><th>K-nC5</th><th>K-C6</th><th>K-C7+</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>{{ results.psat1_table.bubble_point_pressure }}</td>
+                                <td>{{ results.psat1_table.z_liquid }}</td>
+                                <td>{{ results.psat1_table.z_vapor }}</td>
+                                <td>{{ results.psat1_table.oil_viscosity }}</td>
+                                <td>{{ results.psat1_table.gas_viscosity }}</td>
+                                <td>{{ results.psat1_table.liquid_density }}</td>
+                                <td>{{ results.psat1_table.vapor_density }}</td>
+                                <td>{{ results.psat1_table.molar_volume_liquid }}</td>
+                                <td>{{ results.psat1_table.molar_volume_vapor }}</td>
+                                {% for k in results.psat1_table.k_values %}<td>{{ k }}</td>{% endfor %}
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
 
 <script>
 function savePNG(elementId, filename) {

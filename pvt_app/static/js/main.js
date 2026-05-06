@@ -795,7 +795,15 @@ function initializeCharts() {
     const resultDataElement = document.getElementById('pvt-result-data');
     const rawResultData = window.pvtResultData || (resultDataElement ? JSON.parse(resultDataElement.textContent) : null);
 
-    if (!rawResultData || typeof ApexCharts === 'undefined') {
+    if (!rawResultData) {
+        console.error('No PVT result data found');
+        return;
+    }
+
+    if (typeof ApexCharts === 'undefined') {
+        console.error('ApexCharts library not loaded');
+        // Try again in a moment if ApexCharts is loading
+        setTimeout(() => initializeCharts(), 1000);
         return;
     }
 
@@ -806,6 +814,8 @@ function initializeCharts() {
             bubblePointPressure: rawResultData.bubble_point_pressure,
             cce: rawResultData.cce,
             dl: rawResultData.dl,
+            ternaryPlots: rawResultData.ternary_plots || [],
+            dl1PropertyPlots: rawResultData.dl1_property_plots || {},
             fingerprint: rawResultData.fingerprint ? {
                 pressure: rawResultData.fingerprint.pressure,
                 fingerprintIndex: rawResultData.fingerprint.fingerprint_index,
@@ -892,7 +902,16 @@ function initializeCharts() {
     const renderApexChart = ({ containerId, title, seriesConfigs, yAxisTitle, xAxisTitle = 'Pressure (psig)', bubbleMarker = null, pointAnnotations = [], curve = 'smooth', xaxisMin = null, xaxisMax = null, xaxisAnnotations = [], xaxisDecimals = 1, yaxisDecimals = 1 }) => {
         const container = document.getElementById(containerId);
         if (!container) {
+            console.warn(`Chart container "${containerId}" not found`);
             return;
+        }
+
+        // Ensure container has proper dimensions
+        if (!container.style.height) {
+            container.style.height = '320px';
+        }
+        if (!container.style.width) {
+            container.style.width = '100%';
         }
 
         const series = seriesConfigs.map((config) => ({
@@ -992,71 +1011,86 @@ function initializeCharts() {
             },
         };
 
-        const chart = new ApexCharts(container, options);
-        chart.render();
+        try {
+            const chart = new ApexCharts(container, options);
+            chart.render();
+        } catch (error) {
+            console.error(`Error rendering chart "${containerId}":`, error);
+            container.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Error rendering chart</div>`;
+        }
     };
 
-    renderApexChart({
-        containerId: 'cceChart',
-        title: 'CCE: Relative Volume vs Pressure',
-        yAxisTitle: 'Value',
-        xAxisTitle: 'Pressure (psig)',
-        bubbleMarker: { value: bubblePoint, label: 'Bubble Point' },
-        yaxisDecimals: 1,
-        xaxisDecimals: 1,
-        xaxisMax: Math.max(...resultData.cce.pressure, bubblePoint),
-        seriesConfigs: [
-            {
-                name: 'Experimental CCE',
-                data: createPoints(resultData.cce.pressure, resultData.cce.experimental),
-                color: '#0d6efd',
-            },
-            {
-                name: 'Simulated CCE',
-                data: createPoints(resultData.cce.pressure, resultData.cce.simulated),
-                color: '#198754',
-            },
-            {
-                name: 'Bubble Point',
-                type: 'scatter',
-                data: [{ x: bubblePoint, y: interpolateValueAtPressure(resultData.cce.pressure, resultData.cce.experimental, bubblePoint) }],
-                color: '#dc3545',
-                markerSize: 7,
-                showLine: false,
-            },
-        ],
-    });
+    // Add validation for chart data
+    if (!resultData.cce || !resultData.cce.pressure || !resultData.cce.experimental || !resultData.cce.simulated) {
+        console.warn('CCE data is incomplete or missing');
+    } else {
+        renderApexChart({
+            containerId: 'cceChart',
+            title: 'CCE: Relative Volume vs Pressure',
+            yAxisTitle: 'Value',
+            xAxisTitle: 'Pressure (psig)',
+            bubbleMarker: { value: bubblePoint, label: 'Bubble Point' },
+            yaxisDecimals: 1,
+            xaxisDecimals: 1,
+            xaxisMax: Math.max(...resultData.cce.pressure, bubblePoint),
+            seriesConfigs: [
+                {
+                    name: 'Experimental CCE',
+                    data: createPoints(resultData.cce.pressure, resultData.cce.experimental),
+                    color: '#0d6efd',
+                },
+                {
+                    name: 'Simulated CCE',
+                    data: createPoints(resultData.cce.pressure, resultData.cce.simulated),
+                    color: '#198754',
+                },
+                {
+                    name: 'Bubble Point',
+                    type: 'scatter',
+                    data: [{ x: bubblePoint, y: interpolateValueAtPressure(resultData.cce.pressure, resultData.cce.experimental, bubblePoint) }],
+                    color: '#dc3545',
+                    markerSize: 7,
+                    showLine: false,
+                },
+            ],
+        });
+    }
 
-    renderApexChart({
-        containerId: 'dlChart',
-        title: 'DL: Oil Volume Factor vs Pressure',
-        yAxisTitle: 'Value',
-        xAxisTitle: 'Pressure (psig)',
-        bubbleMarker: { value: bubblePoint, label: 'Bubble Point' },
-        yaxisDecimals: 1,
-        xaxisDecimals: 1,
-        xaxisMax: Math.max(...resultData.dl.pressure, bubblePoint),
-        seriesConfigs: [
-            {
-                name: 'Experimental DL',
-                data: createPoints(resultData.dl.pressure, resultData.dl.experimental),
-                color: '#0d6efd',
-            },
-            {
-                name: 'Simulated DL',
-                data: createPoints(resultData.dl.pressure, resultData.dl.simulated),
-                color: '#198754',
-            },
-            {
-                name: 'Bubble Point',
-                type: 'scatter',
-                data: [{ x: bubblePoint, y: interpolateValueAtPressure(resultData.dl.pressure, resultData.dl.experimental, bubblePoint) }],
-                color: '#dc3545',
-                markerSize: 7,
-                showLine: false,
-            },
-        ],
-    });
+    // Add validation for DL data
+    if (!resultData.dl || !resultData.dl.pressure || !resultData.dl.experimental || !resultData.dl.simulated) {
+        console.warn('DL data is incomplete or missing');
+    } else {
+        renderApexChart({
+            containerId: 'dlChart',
+            title: 'DL: Oil Volume Factor vs Pressure',
+            yAxisTitle: 'Value',
+            xAxisTitle: 'Pressure (psig)',
+            bubbleMarker: { value: bubblePoint, label: 'Bubble Point' },
+            yaxisDecimals: 1,
+            xaxisDecimals: 1,
+            xaxisMax: Math.max(...resultData.dl.pressure, bubblePoint),
+            seriesConfigs: [
+                {
+                    name: 'Experimental DL',
+                    data: createPoints(resultData.dl.pressure, resultData.dl.experimental),
+                    color: '#0d6efd',
+                },
+                {
+                    name: 'Simulated DL',
+                    data: createPoints(resultData.dl.pressure, resultData.dl.simulated),
+                    color: '#198754',
+                },
+                {
+                    name: 'Bubble Point',
+                    type: 'scatter',
+                    data: [{ x: bubblePoint, y: interpolateValueAtPressure(resultData.dl.pressure, resultData.dl.experimental, bubblePoint) }],
+                    color: '#dc3545',
+                    markerSize: 7,
+                    showLine: false,
+                },
+            ],
+        });
+    }
 
     if (resultData.fingerprint) {
         const fingerprintBubblePressure = bubblePoint;
@@ -1130,6 +1164,38 @@ function initializeCharts() {
         // Hard-anchor the operating point to the exact lab coordinate.
         const operatingPointTemperature = 220;
         const operatingPointPressure = 2516.7;
+
+        // Bubble point graph using Plotly
+        const bubblePointTraces = [
+            {
+                x: resultData.phaseEnvelope.temperature,
+                y: resultData.phaseEnvelope.bubblePressure,
+                name: 'Bubble Point',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 3 },
+                marker: { size: 6 },
+                fill: 'tozeroy',
+                fillcolor: 'rgba(220, 53, 69, 0.1)',
+            },
+        ];
+
+        const bubblePointLayout = {
+            title: 'Bubble Point Pressure vs Temperature',
+            xaxis: {
+                title: 'Temperature (°F)',
+                zeroline: false,
+            },
+            yaxis: {
+                title: 'Bubble Point Pressure (psig)',
+                zeroline: false,
+            },
+            hovermode: 'closest',
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+
+        Plotly.newPlot('bubblePointChart', bubblePointTraces, bubblePointLayout, { responsive: true });
 
         // Phase envelope plot using Plotly
         const phaseTraces = [
@@ -1205,6 +1271,252 @@ function initializeCharts() {
         };
 
         Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
+    }
+
+    // ===== TERNARY PLOTS (Figures 3-5) =====
+    if (resultData.ternaryPlots && resultData.ternaryPlots.length >= 3) {
+        const ternaryChartIds = ['ternaryChart1', 'ternaryChart2', 'ternaryChart3'];
+        const ternaryPressures = [2000, 4000, 6000];
+
+        function normalizeTernaryPoint(a, b, c) {
+            const values = [Math.max(a, 0), Math.max(b, 0), Math.max(c, 0)];
+            const total = values[0] + values[1] + values[2] || 1;
+            return values.map((value) => (value / total) * 100);
+        }
+        
+        for (let i = 0; i < 3; i++) {
+            const ternaryData = resultData.ternaryPlots[i];
+            const aValue = ternaryData.co2_n2 * 100;
+            const bValue = ternaryData.light_hc * 100;
+            const cValue = ternaryData.heavy_hc * 100;
+
+            const shadedVertices = [
+                normalizeTernaryPoint(aValue + 7, bValue - 3.5, cValue - 3.5),
+                normalizeTernaryPoint(aValue - 3.5, bValue + 7, cValue - 3.5),
+                normalizeTernaryPoint(aValue - 3.5, bValue - 3.5, cValue + 7),
+            ];
+
+            const shadedTrace = {
+                a: [shadedVertices[0][0], shadedVertices[1][0], shadedVertices[2][0], shadedVertices[0][0]],
+                b: [shadedVertices[0][1], shadedVertices[1][1], shadedVertices[2][1], shadedVertices[0][1]],
+                c: [shadedVertices[0][2], shadedVertices[1][2], shadedVertices[2][2], shadedVertices[0][2]],
+                type: 'scatterternary',
+                mode: 'lines',
+                line: {
+                    color: 'rgba(13, 110, 253, 0.55)',
+                    width: 1.25,
+                },
+                fill: 'toself',
+                fillcolor: 'rgba(13, 110, 253, 0.16)',
+                hoverinfo: 'skip',
+                showlegend: false,
+                name: 'Shaded zone'
+            };
+            
+            // Create Plotly ternary diagram
+            const ternaryTrace = {
+                a: [aValue],  // CO2/N2 percentage
+                b: [bValue],  // Light HC percentage
+                c: [cValue],  // Heavy HC percentage
+                type: 'scatterternary',
+                mode: 'markers',
+                marker: {
+                    size: 12,
+                    color: '#0d6efd',
+                    symbol: 'circle',
+                    line: { color: '#0856ca', width: 2 }
+                },
+                text: [`CO₂/N₂: ${(ternaryData.co2_n2 * 100).toFixed(1)}%<br>Light HC: ${(ternaryData.light_hc * 100).toFixed(1)}%<br>Heavy HC: ${(ternaryData.heavy_hc * 100).toFixed(1)}%`],
+                hovertemplate: '%{text}<extra></extra>',
+                name: 'Composition'
+            };
+            
+            const ternaryLayout = {
+                title: `Ternary Plot (T=220°F, P=${ternaryPressures[i]} psi)`,
+                ternary: {
+                    sum: 100,
+                    aaxis: {
+                        title: 'CO₂/N₂ (%)',
+                        tickfont: { size: 12 },
+                        showline: true,
+                        showgrid: true,
+                    },
+                    baxis: {
+                        title: 'Light HC: C1-C3 (%)',
+                        tickfont: { size: 12 },
+                        showline: true,
+                        showgrid: true,
+                    },
+                    caxis: {
+                        title: 'Heavy HC: C4+ (%)',
+                        tickfont: { size: 12 },
+                        showline: true,
+                        showgrid: true,
+                    }
+                },
+                height: 500,
+                margin: { t: 60, r: 60, b: 60, l: 60 },
+                font: { size: 11 },
+                showlegend: false
+            };
+            
+            Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ternaryTrace], ternaryLayout, { responsive: true });
+        }
+    }
+
+    // ===== DL1 PROPERTY PLOTS (Figures 6-12) =====
+    if (resultData.dl1PropertyPlots) {
+        const props = resultData.dl1PropertyPlots;
+        
+        // Figure 6: CCE Relative Volume (using existing cceChart)
+        // Already rendered above
+        
+        // Figure 7: DL Vapor Z-Factor
+        const zFactorTraces = [{
+            x: props.pressure,
+            y: props.z_factor,
+            name: 'Gas Z-Factor',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#0d6efd', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(13, 110, 253, 0.1)',
+        }];
+        const zFactorLayout = {
+            title: 'DL Vapor Z-Factor vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Z-Factor' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlZFactorChart', zFactorTraces, zFactorLayout, { responsive: true });
+
+        // Figure 8: DL Liquid Density
+        const densityTraces = [{
+            x: props.pressure,
+            y: props.liquid_density,
+            name: 'Liquid Density',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#198754', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(25, 135, 84, 0.1)',
+        }];
+        const densityLayout = {
+            title: 'DL Liquid Density vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Density (lb/ft³)' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlDensityChart', densityTraces, densityLayout, { responsive: true });
+
+        // Figure 9: DL Gas-Oil Ratio
+        const gorTraces = [{
+            x: props.pressure,
+            y: props.gor,
+            name: 'GOR',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#fd7e14', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(253, 126, 20, 0.1)',
+        }];
+        const gorLayout = {
+            title: 'DL Gas-Oil Ratio vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'GOR (scf/stb)' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlGORChart', gorTraces, gorLayout, { responsive: true });
+
+        // Figure 10: DL Oil Relative Volume
+        const oilRelVolTraces = [{
+            x: props.pressure,
+            y: props.oil_relative_volume,
+            name: 'Oil Rel Vol',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#0d6efd', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(13, 110, 253, 0.1)',
+        }];
+        const oilRelVolLayout = {
+            title: 'DL Oil Relative Volume vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Oil Relative Volume' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlOilRelVolChart', oilRelVolTraces, oilRelVolLayout, { responsive: true });
+
+        // Figure 11: DL Gas FVF
+        const gasFvfTraces = [{
+            x: props.pressure,
+            y: props.gas_fvf,
+            name: 'Gas FVF',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#6c757d', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(108, 117, 125, 0.1)',
+        }];
+        const gasFvfLayout = {
+            title: 'DL Gas Formation Volume Factor vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Gas FVF (rb/Mscf)' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlGasFVFChart', gasFvfTraces, gasFvfLayout, { responsive: true });
+
+        // Figure 12: DL Gas Gravity
+        const gasGravityTraces = [{
+            x: props.pressure,
+            y: props.gas_gravity,
+            name: 'Gas Gravity',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#8b5cf6', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(139, 92, 246, 0.1)',
+        }];
+        const gasGravityLayout = {
+            title: 'DL Gas Gravity vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Gas Gravity (relative to air)' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('dlGasGravityChart', gasGravityTraces, gasGravityLayout, { responsive: true });
+
+        // Figure 6: CCE Relative Volume
+        const cceRelVolTraces = [{
+            x: resultData.cce.pressure,
+            y: resultData.cce.simulated,
+            name: 'CCE Relative Volume',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#198754', width: 2 },
+            marker: { size: 6 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(25, 135, 84, 0.1)',
+        }];
+        const cceRelVolLayout = {
+            title: 'CCE Relative Volume vs Pressure',
+            xaxis: { title: 'Pressure (psig)' },
+            yaxis: { title: 'Relative Volume' },
+            height: 320,
+            margin: { t: 40, r: 20, b: 60, l: 60 },
+        };
+        Plotly.newPlot('cceRelVolChart', cceRelVolTraces, cceRelVolLayout, { responsive: true });
     }
 
 }

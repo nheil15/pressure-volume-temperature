@@ -16,14 +16,30 @@ main {
 }
 
 .card {
-    border: 1px solid var(--pvt-border);
-    border-radius: 1rem;
+    border: 2px solid var(--pvt-border);
+    border-radius: 1.2rem;
     background: var(--pvt-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    border-color: #b3d9ff;
+}
+
+.card-body {
+    padding: 1.5rem;
 }
 
 .chart-wrap {
     position: relative;
-    min-height: 320px;
+    min-height: 400px;
+    border: 1px solid var(--pvt-border);
+    border-radius: 0.8rem;
+    background: linear-gradient(135deg, #fafbfc 0%, #ffffff 100%);
+    padding: 1rem;
+    overflow: hidden;
 }
 
 .summary-stat {
@@ -43,5 +59,12 @@ main {
 .chart-wrap > div,
 .chart-wrap canvas {
     width: 100% !important;
-    height: 320px !important;
+    height: 400px !important;
+    display: block !important;
+}
+
+/* Ternary specific styling */
+#ternaryChart1, #ternaryChart2, #ternaryChart3 {
+    width: 100% !important;
+    height: 400px !important;
 }

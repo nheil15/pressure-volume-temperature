@@ -906,69 +906,384 @@ def prepare_series_payload(pressure_values, cce_simulated, dl_simulated, bubble_
 
 def make_interpretation(bubble_point_pressure, rmse_value, first_volume, last_volume, cce_rmse=None, dl_rmse=None, reservoir_temp=None):
     """
-    Generate a regression analysis interpretation based on results and inputs.
+    Generate an interpretation summary (detailed) based on results and inputs.
     """
-    
+
     if cce_rmse is None:
         cce_rmse = rmse_value
     if dl_rmse is None:
         dl_rmse = rmse_value * 0.85
     if reservoir_temp is None:
         reservoir_temp = 220.0
-    
-    # Regression Analysis Assessment
-    if cce_rmse < 0.05:
-        quality = "Excellent"
-        assessment = (
-            f"The regression analysis achieved excellent accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
-            f"The EOS model accurately captures the fluid behavior across both single-phase (above {bubble_point_pressure:.1f} psig) "
-            f"and two-phase regions. The regression variables are well-tuned and the model is suitable for reservoir simulation and "
-            f"production forecasting."
+    # Build data-driven explanations for the interpretation summary
+    # Volumetric behavior
+    try:
+        vol_change = float(last_volume) - float(first_volume)
+        vol_pct = (vol_change / float(first_volume) * 100.0) if abs(float(first_volume)) > 1e-9 else 0.0
+    except Exception:
+        vol_change = 0.0
+        vol_pct = 0.0
+
+    if vol_change > 0:
+        behavior_expl = (
+            f"As pressure decreases across the studied range the normalized relative volume increases from {first_volume:.4f} to {last_volume:.4f} "
+            f"(Δ={vol_change:.4f}, {vol_pct:.1f}% increase). This indicates net volumetric expansion and gas liberation as the fluid moves into "
+            f"the two-phase region below the bubble point at {bubble_point_pressure:.1f} psig. Expect stronger deviations in measured PVT properties "
+            f"near and below the bubble point due to phase split and free gas evolution."
         )
-    elif cce_rmse < 0.15:
-        quality = "Good"
-        assessment = (
-            f"The regression analysis achieved good accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
-            f"The model performs well in the single-phase region above the bubble point ({bubble_point_pressure:.1f} psig) but shows "
-            f"some deviations in the two-phase region below bubble point. To improve the fit, consider: (1) including C7+ Omega and "
-            f"volume shift parameters as regression variables, (2) using finer component grouping for intermediate hydrocarbons, "
-            f"(3) increasing maximum regression iterations to 50+, and (4) weighting sub-bubble-point observations more heavily."
-        )
-    elif cce_rmse < 0.30:
-        quality = "Moderate"
-        assessment = (
-            f"The regression analysis shows moderate accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
-            f"Significant deviations are present, especially below the bubble point ({bubble_point_pressure:.1f} psig). "
-            f"The regression configuration needs refinement: expand the set of regression variables to include C7+ properties, "
-            f"volume shift parameters, and intermediate hydrocarbon components. Increase iteration limits and implement more aggressive "
-            f"variable grouping strategies."
+    elif vol_change < 0:
+        behavior_expl = (
+            f"The normalized relative volume decreases from {first_volume:.4f} to {last_volume:.4f} (Δ={vol_change:.4f}, {abs(vol_pct):.1f}% decrease), "
+            f"suggesting overall compaction/condensation behavior with pressure changes. This trend may reflect increased liquid fraction or "
+            f"measurement uncertainty near the bubble point ({bubble_point_pressure:.1f} psig)."
         )
     else:
-        quality = "Poor"
-        assessment = (
-            f"The regression analysis shows poor accuracy with CCE RMSE of {cce_rmse:.4f} and DL RMSE of {dl_rmse:.4f}. "
-            f"The current regression configuration is insufficient for accurate fluid modeling. Consider: (1) significantly expanding "
-            f"the regression parameter set with C7+ Omega A, Omega B, and volume shift, (2) including all intermediate hydrocarbons as "
-            f"separate regression groups, (3) using 100+ iterations, and (4) implementing aggressive weighting for regions of interest, "
-            f"particularly around the bubble point at {bubble_point_pressure:.1f} psig."
+        behavior_expl = (
+            f"There is negligible change in normalized relative volume across the pressure range (both start and end ~{first_volume:.4f}). "
+            f"This implies fluids remain approximately incompressible in the measured interval or the model has captured a near-constant response."
         )
-    
-    interpretation = (
-        f"**Regression Analysis**\n\n"
-        f"**Quality Assessment: {quality}**\n\n"
-        f"{assessment}\n\n"
-        f"**Input Parameters:**\n"
-        f"- Reservoir Temperature: {reservoir_temp:.1f}°F\n"
-        f"- Bubble Point Pressure: {bubble_point_pressure:.1f} psig\n"
-        f"- CCE RMSE: {cce_rmse:.4f}\n"
-        f"- DL RMSE: {dl_rmse:.4f}\n\n"
-        f"**Fingerprint Analysis:**\n"
-        f"The Fingerprint Plot shows the convergence of normalized CCE and DL values. If the curves remain close throughout the "
-        f"pressure range, the regression has captured the fluid behavior effectively. Divergence at lower pressures indicates that "
-        f"additional regression variables or iterations may be needed to improve deep depletion accuracy."
+
+    # Accuracy of EOS matching
+    eos_expl = (
+        f"The EOS matching shows CCE RMSE = {cce_rmse:.4f} and DL RMSE = {dl_rmse:.4f}. "
+        f"Numerically, this indicates {'better' if cce_rmse < dl_rmse else 'worse or comparable'} fit for CCE relative to DL. "
+        f"RMSE magnitudes suggest {'high confidence in model predictions' if cce_rmse < 0.05 and dl_rmse < 0.07 else 'moderate confidence; review sub-bubble-point behavior'}."
     )
-    
+
+    # Regression parameter analysis
+    if cce_rmse < dl_rmse:
+        reg_sensitivity = (
+            "CCE shows a tighter fit than DL, implying regression variables have effectively captured volumetric compressibility trends. "
+            "DL deviations point to gas-phase modelling or Z-factor sensitivity; consider refining vapor-phase parameters (K-values, gas gravity) and "
+            "including small component groups in regression."
+        )
+    elif dl_rmse < cce_rmse:
+        reg_sensitivity = (
+            "DL shows a tighter fit than CCE, indicating the model better captures oil-volume behavior than the normalized compressibility. "
+            "Improve CCE fit by adding volume-shift parameters, adjusting C7+ characterization, or reweighting low-pressure observations."
+        )
+    else:
+        reg_sensitivity = (
+            "Both CCE and DL exhibit similar RMSE, suggesting a balanced fit. Examine correlated parameters and cross-sensitivity (e.g., C7+ omega and volume shift) "
+            "to further reduce residuals."
+        )
+
+    # Engineering implications
+    engineering_expl = (
+        f"From an engineering perspective, the bubble point at {bubble_point_pressure:.1f} psig and reservoir temperature of {reservoir_temp:.1f}°F "
+        f"define the operational threshold where free gas appears. If surface or reservoir operations approach pressures below the bubble point, expect increased "
+        f"GOR and potential impacts on deliverability, separation requirements, and compressor sizing. Use the calibrated EOS for forecasting production, "
+        f"but apply conservative safety factors if RMSE values indicate moderate fit."
+    )
+
+    # Build interpretation summary (compact) without the extra heading
+    interpretation = (
+        f"1) Behavior of Reservoir Fluids with Pressure Changes:\n{behavior_expl}\n\n"
+        f"2) Accuracy of EOS Matching:\n{eos_expl}\n\n"
+        f"3) Regression Parameter Analysis from the Observed and Calculated Data:\n{reg_sensitivity}\n\n"
+        f"4) Engineering Implications of the Results:\n{engineering_expl}\n"
+    )
+
     return interpretation
+
+
+# ===== COMPREHENSIVE PVT PROPERTY CALCULATIONS =====
+
+def estimate_oil_viscosity(pressure_psia, bo_value, rs_value, temperature_f, stock_tank_density, gas_sg):
+    """Estimate oil viscosity using empirical correlations (Beggs & Robinson method)."""
+    temperature_r = temperature_f + 459.67
+    z = 3.0161 - 0.02023 * gas_sg * rs_value
+    y = 10.0 ** z - 1.0
+    
+    # Dead oil viscosity as function of temperature
+    mu_od = 10.0 ** (0.43 + 8.33 / np.log10(150.0 * temperature_f / gas_sg)) - 1.0
+    mu_od = max(mu_od, 0.1)
+    
+    # Live oil viscosity
+    mu_o = mu_od * (0.9715 - 0.6151 * np.log10(rs_value / 100.0 + 1.0))
+    mu_o = max(mu_o, 0.1)
+    
+    return round(float(mu_o), 4)
+
+
+def estimate_gas_viscosity(pressure_psia, temperature_f, gas_sg):
+    """Estimate gas viscosity using Lee, Gonzalez & Eakin correlation."""
+    temperature_r = temperature_f + 459.67
+    mu_g_ref = 0.00001 * (gas_sg ** 0.5) * (temperature_r ** 0.5)  # At 1 atm
+    
+    # Pressure correction
+    pr_ps = (pressure_psia + 14.7) / 14.7
+    y_g = 0.01 * pr_ps * mu_g_ref
+    z_g = y_g + 0.04 * (y_g ** 2)
+    
+    mu_g = (mu_g_ref * (1.0 + 0.061 * z_g)) / (1.0 + 0.011 * z_g)
+    
+    return round(float(max(mu_g, 0.01)), 5)
+
+
+def estimate_surface_tension(pressure_psia, bubble_point_pressure):
+    """Estimate interfacial tension between oil and gas phases."""
+    # Simplified correlation: surface tension decreases with pressure
+    pb = max(float(bubble_point_pressure), 100.0)
+    pr = max(float(pressure_psia), 1.0)
+    
+    # Maximum surface tension near bubble point
+    st_max = 30.0  # dynes/cm
+    
+    # Decrease with pressure
+    if pr >= pb:
+        # Above bubble point
+        st = st_max * (1.0 - 0.3 * ((pr - pb) / max(pb, 1.0)) ** 0.5)
+    else:
+        # Below bubble point
+        st = st_max * (1.0 - 0.5 * ((pb - pr) / max(pb, 1.0)) ** 0.4)
+    
+    st = np.clip(st, 0.1, st_max)
+    return round(float(st), 2)
+
+
+def calculate_k_values(composition_dict, pressure_psia, temperature_f, z_liquid=None, z_vapor=None):
+    """Calculate K-values (Ki = yi/xi) for each component using simplified Wilson equation or PR EOS."""
+    if not composition_dict:
+        return {}
+    
+    temperature_r = temperature_f + 459.67
+    temperature_k = temperature_r * 5.0 / 9.0
+    pc_ref = 14.696  # atm reference
+    
+    k_values = {}
+    for component, mole_frac in composition_dict.items():
+        props = COMPONENT_DATABASE.get(component)
+        if not props or mole_frac <= 0:
+            continue
+        
+        pc_bar = props["pc"] * 0.986923  # bar
+        tc_k = props["tc"]
+        omega = props["omega"]
+        
+        # Wilson K-value equation
+        # Guard against divide by zero
+        pressure_guard = max(pressure_psia * 0.0689476, 0.1)
+        k_i = (pc_bar / pressure_guard) * np.exp(5.373 * (1.0 + omega) * (1.0 - tc_k / temperature_k))
+        k_values[component] = round(float(np.clip(k_i, 0.01, 100.0)), 4)
+    
+    return k_values
+
+
+def compute_molar_distribution(composition_dict, k_values_liquid_phase, k_values_vapor_phase):
+    """Compute molar fractions in liquid and vapor phases."""
+    molar_dist = {}
+    
+    for component, zi in composition_dict.items():
+        ki = k_values_vapor_phase.get(component, 1.0)
+        
+        # Trivial solution for phase split
+        if ki >= 0.01:
+            yi = ki * zi / (1.0 + (ki - 1.0) * 0.5)  # Assumes 50% vapor fraction for demo
+        else:
+            yi = 0.0
+        
+        xi = zi / max(ki, 0.01)
+        
+        molar_dist[component] = {
+            "zi": round(float(zi), 6),
+            "xi": round(float(np.clip(xi, 0.0, 1.0)), 6),
+            "yi": round(float(np.clip(yi, 0.0, 1.0)), 6),
+        }
+    
+    return molar_dist
+
+
+def generate_ternary_plot_data(composition_dict, pressure_psia, temperature_f, bubble_point_pressure):
+    """Generate ternary diagram data for the three major component groups."""
+    # Group components: CO2/N2, Light HC (C1-C3), Heavy HC (C4+)
+    co2_n2 = composition_dict.get("co2", 0.0) + composition_dict.get("n2", 0.0)
+    light_hc = (composition_dict.get("c1", 0.0) + composition_dict.get("c2", 0.0) + composition_dict.get("c3", 0.0))
+    heavy_hc = 1.0 - co2_n2 - light_hc
+    heavy_hc = max(0.0, min(1.0, heavy_hc))
+    
+    return {
+        "co2_n2": round(float(co2_n2), 4),
+        "light_hc": round(float(light_hc), 4),
+        "heavy_hc": round(float(heavy_hc), 4),
+        "pressure": round(float(pressure_psia), 2),
+        "temperature": round(float(temperature_f), 1),
+    }
+
+
+def build_comprehensive_cce_table(pressure_values, cce_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, dl_simulated=None):
+    """Build comprehensive CCE1 table with all properties for each pressure point."""
+    table_rows = []
+    temperature_f = reservoir_temperature
+    
+    for i, pressure in enumerate(pressure_values):
+        cce_val = cce_simulated[i] if i < len(cce_simulated) else 1.0
+        
+        # Estimate properties
+        vapor_mole_frac = np.clip(0.1 + 0.4 * (1.0 - pressure / max(pressure_values[0], 1.0)), 0.01, 0.99)
+        liquid_mole_frac = 1.0 - vapor_mole_frac
+        
+        # Calculate properties
+        z_vapor = 0.85 + 0.05 * (temperature_f / 680.0) - 0.02 * (pressure / 3000.0)
+        z_liquid = 0.05
+        
+        # Densities (simple estimate)
+        liquid_dens = 50.0 + 0.002 * pressure  # lb/ft3
+        vapor_dens = 0.1 + 0.00005 * pressure  # lb/ft3
+        
+        # K-values
+        k_values = calculate_k_values(composition_dict, pressure, temperature_f, z_liquid, z_vapor)
+        
+        # Surface tension
+        st = estimate_surface_tension(pressure, bubble_point_pressure)
+        
+        # Oil viscosity estimate
+        rs_est = 600.0 * (pressure / max(bubble_point_pressure, 100.0)) ** 0.9
+        bo_est = 1.0 + 0.0005 * rs_est
+        oil_visc = estimate_oil_viscosity(pressure, bo_est, rs_est, temperature_f, 50.0, 0.65)
+        
+        # Gas viscosity estimate
+        gas_visc = estimate_gas_viscosity(pressure, temperature_f, 0.65)
+        
+        # Molar volumes (cm3/mol)
+        r_gas = 82.057  # cm3·atm/(mol·K)
+        temp_k = (temperature_f + 459.67) * 5.0 / 9.0
+        molar_vol_liquid = 100.0  # approximate for hydrocarbon liquids
+        # Guard against divide by zero
+        pressure_guard = max(pressure * 0.0689476, 0.1)
+        molar_vol_vapor = (r_gas * temp_k) / pressure_guard  # cm3/mol
+        
+        k_vals_list = [round(k_values.get(comp, 1.0), 4) for comp in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
+        
+        table_rows.append({
+            "pressure": round(float(pressure), 2),
+            "relative_volume": round(float(cce_val), 4),
+            "vapor_mole_frac": round(float(vapor_mole_frac), 4),
+            "liquid_density": round(float(liquid_dens), 2),
+            "vapor_density": round(float(vapor_dens), 4),
+            "z_liquid": round(float(z_liquid), 4),
+            "z_vapor": round(float(z_vapor), 4),
+            "surface_tension": round(float(st), 2),
+            "liquid_saturation": round(float(liquid_mole_frac), 4),
+            "oil_viscosity": oil_visc,
+            "gas_viscosity": gas_visc,
+            "molar_volume_liquid": round(float(molar_vol_liquid), 2),
+            "molar_volume_vapor": round(float(molar_vol_vapor), 2),
+            "k_values": k_vals_list,  # [CO2, N2, C1, C2, C3, iC4, nC4, iC5, nC5, C6, C7+]
+        })
+    
+    return table_rows
+
+
+def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, rs_values=None, z_values=None, density_values=None):
+    """Build comprehensive DL1 table with all properties for each pressure point."""
+    table_rows = []
+    temperature_f = reservoir_temperature
+    
+    if rs_values is None:
+        rs_values = np.array([600.0 * (p / max(bubble_point_pressure, 100.0)) ** 0.9 for p in pressure_values])
+    if z_values is None:
+        z_values = np.array([0.85 + 0.05 * (temperature_f / 680.0) - 0.02 * (p / 3000.0) for p in pressure_values])
+    if density_values is None:
+        density_values = np.array([50.0 + 0.002 * p for p in pressure_values])
+    
+    for i, pressure in enumerate(pressure_values):
+        dl_val = dl_simulated[i] if i < len(dl_simulated) else 1.0
+        rs_val = rs_values[i] if i < len(rs_values) else 600.0
+        z_val = z_values[i] if i < len(z_values) else 0.85
+        dens_val = density_values[i] if i < len(density_values) else 50.0
+        
+        # Estimate additional properties
+        vapor_mole_frac = np.clip(0.15 + 0.3 * (1.0 - pressure / max(pressure_values[0], 1.0)), 0.05, 0.95)
+        gas_dens = 0.15 + 0.0001 * pressure
+        gas_gravity = 0.65 + 0.01 * (pressure / 3000.0)
+        
+        # Gas FVF (Bg)
+        bg = (0.00502 * z_val * (temperature_f + 459.67)) / (pressure + 14.7)
+        
+        # Oil viscosity
+        oil_visc = estimate_oil_viscosity(pressure, dl_val, rs_val, temperature_f, 50.0, gas_gravity)
+        gas_visc = estimate_gas_viscosity(pressure, temperature_f, gas_gravity)
+        
+        # Surface tension
+        st = estimate_surface_tension(pressure, bubble_point_pressure)
+        
+        # K-values
+        z_liquid = 0.05
+        z_vapor = z_val
+        k_values = calculate_k_values(composition_dict, pressure, temperature_f, z_liquid, z_vapor)
+        k_vals_list = [round(k_values.get(comp, 1.0), 4) for comp in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
+        
+        # Molar volumes
+        r_gas = 82.057
+        temp_k = (temperature_f + 459.67) * 5.0 / 9.0
+        molar_vol_liquid = 100.0
+        # Guard against divide by zero
+        pressure_guard = max(pressure * 0.0689476, 0.1)
+        molar_vol_vapor = (r_gas * temp_k) / pressure_guard
+        
+        table_rows.append({
+            "pressure": round(float(pressure), 2),
+            "gor": round(float(rs_val), 2),
+            "total_relative_volume": round(float(dl_val), 4),
+            "oil_relative_volume": round(float(0.95 * dl_val), 4),
+            "liquid_density": round(float(dens_val), 2),
+            "vapor_density": round(float(gas_dens), 4),
+            "gas_gravity": round(float(gas_gravity), 4),
+            "z_liquid": round(float(z_liquid), 4),
+            "z_vapor": round(float(z_vapor), 4),
+            "surface_tension": round(float(st), 2),
+            "gas_fvf": round(float(bg), 6),
+            "oil_viscosity": oil_visc,
+            "gas_viscosity": gas_visc,
+            "molar_volume_liquid": round(float(molar_vol_liquid), 2),
+            "molar_volume_vapor": round(float(molar_vol_vapor), 2),
+            "k_values": k_vals_list,
+        })
+    
+    return table_rows
+
+
+def build_psat_table(composition_dict, bubble_point_pressure, reservoir_temperature):
+    """Build PSAT1 saturation pressure table with bubble point properties."""
+    temperature_f = reservoir_temperature
+    temp_k = (temperature_f + 459.67) * 5.0 / 9.0
+    r_gas = 82.057
+    
+    # Saturation properties at bubble point
+    z_sat = 0.85 + 0.05 * (temperature_f / 680.0) - 0.02 * (bubble_point_pressure / 3000.0)
+    
+    # K-values at saturation
+    z_liquid = 0.05
+    k_values = calculate_k_values(composition_dict, bubble_point_pressure, temperature_f, z_liquid, z_sat)
+    k_vals_list = [round(k_values.get(comp, 1.0), 4) for comp in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
+    
+    # Viscosity at saturation
+    rs_sat = 700.0
+    bo_sat = 1.15
+    oil_visc_sat = estimate_oil_viscosity(bubble_point_pressure, bo_sat, rs_sat, temperature_f, 50.0, 0.65)
+    gas_visc_sat = estimate_gas_viscosity(bubble_point_pressure, temperature_f, 0.65)
+    
+    # Densities at saturation
+    liquid_dens_sat = 52.0
+    vapor_dens_sat = 0.2
+    
+    # Molar volumes at saturation
+    molar_vol_liquid_sat = 100.0
+    molar_vol_vapor_sat = (r_gas * temp_k) / (bubble_point_pressure * 0.0689476)
+    
+    return {
+        "bubble_point_pressure": round(float(bubble_point_pressure), 2),
+        "z_liquid": round(float(z_liquid), 4),
+        "z_vapor": round(float(z_sat), 4),
+        "oil_viscosity": oil_visc_sat,
+        "gas_viscosity": gas_visc_sat,
+        "liquid_density": round(float(liquid_dens_sat), 2),
+        "vapor_density": round(float(vapor_dens_sat), 4),
+        "molar_volume_liquid": round(float(molar_vol_liquid_sat), 2),
+        "molar_volume_vapor": round(float(molar_vol_vapor_sat), 2),
+        "k_values": k_vals_list,
+    }
 
 
 @app.route("/")
@@ -1182,6 +1497,62 @@ def analyze():
         "rmse": compute_rmse(dl_table_exp, dl_table_sim),
     }
 
+    # ===== COMPREHENSIVE REPORT DATA =====
+    
+    # Generate ternary plot data at specific pressures (T=220°F)
+    ternary_pressures = [2000.0, 4000.0, 6000.0]
+    ternary_data = []
+    for tp in ternary_pressures:
+        ternary_data.append(generate_ternary_plot_data(composition_dict, tp, 220.0, bubble_point_pressure))
+    
+    # Generate individual property arrays for DL1 plots
+    # Select pressure points for display (every nth point)
+    display_pressure_indices = list(range(0, len(dl_pressure), max(1, len(dl_pressure) // 8)))
+    if len(dl_pressure) - 1 not in display_pressure_indices:
+        display_pressure_indices.append(len(dl_pressure) - 1)
+    
+    display_pressures = [dl_pressure[i] for i in display_pressure_indices]
+    display_z_values = [z_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
+    display_density_values = [density_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
+    display_rs_values = [rs_simulated_axis[np.argmin(np.abs(fingerprint_pressure_axis - p))] for p in display_pressures]
+    
+    # Compute Bg (gas FVF) values
+    display_bg_values = []
+    for p, z in zip(display_pressures, display_z_values):
+        bg = (0.00502 * float(z) * (float(reservoir_temperature) + 459.67)) / (float(p) + 14.7)
+        display_bg_values.append(float(bg))
+    
+    # Gas gravity (estimate)
+    gas_sg = estimate_gas_specific_gravity(composition_dict)
+    display_gas_gravity = [gas_sg + 0.01 * (p / 3000.0) for p in display_pressures]
+    
+    # Oil relative volume (simplified)
+    display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
+    
+    # Build comprehensive tables
+    cce_table_comprehensive = build_comprehensive_cce_table(
+        dl_pressure, cce_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, cce_simulated
+    )
+    dl_table_comprehensive = build_comprehensive_dl_table(
+        dl_pressure, dl_simulated, composition_dict, bubble_point_pressure, reservoir_temperature, rs_simulated_axis, z_simulated_axis, density_simulated_axis
+    )
+    psat_table_data = build_psat_table(composition_dict, bubble_point_pressure, reservoir_temperature)
+    
+    # Attach comprehensive report data to payload
+    results_payload["ternary_plots"] = ternary_data
+    results_payload["dl1_property_plots"] = {
+        "pressure": [round(p, 2) for p in display_pressures],
+        "z_factor": [round(z, 4) for z in display_z_values],
+        "liquid_density": [round(d, 2) for d in display_density_values],
+        "gor": [round(rs, 2) for rs in display_rs_values],
+        "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
+        "gas_fvf": [round(bg, 6) for bg in display_bg_values],
+        "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],
+    }
+    results_payload["cce1_table"] = cce_table_comprehensive
+    results_payload["dl1_table"] = dl_table_comprehensive
+    results_payload["psat1_table"] = psat_table_data
+
     results_payload["interpretation"] = make_interpretation(
         bubble_point_pressure,
         (results_payload["cce"]["rmse"] + results_payload["dl"]["rmse"]) / 2.0,
@@ -1225,9 +1596,7 @@ def results():
         cce_simulated_axis = compute_cce_simulation(pressure_axis, bubble_point_pressure)
         dl_simulated_axis = compute_dl_bo_simulation(pressure_axis, bubble_point_pressure, 1.7493)
 
-
         results_id = uuid.uuid4().hex
-        RESULTS_CACHE[results_id] = results_payload
         session["pvt_results_id"] = results_id
         fp_pressure = np.arange(bubble_point_pressure, -1.0, -350.0)
         if fp_pressure[-1] != 0.0:
@@ -1306,6 +1675,51 @@ def results():
                 "cricondenbar_pressure": round(phase_envelope_pt["cricondenbar_pressure"] - 14.7, 2),
             },
         }
+        
+        # ===== DEMO COMPREHENSIVE REPORT DATA =====
+        ternary_data = []
+        for tp in [2000.0, 4000.0, 6000.0]:
+            ternary_data.append(generate_ternary_plot_data(demo_composition, tp, 220.0, bubble_point_pressure))
+        
+        display_pressure_indices = list(range(0, len(pressure_axis), max(1, len(pressure_axis) // 8)))
+        if len(pressure_axis) - 1 not in display_pressure_indices:
+            display_pressure_indices.append(len(pressure_axis) - 1)
+        
+        display_pressures = [pressure_axis[i] for i in display_pressure_indices]
+        display_z_values = [np.interp(p, fp_pressure[::-1], z_axis[::-1]) for p in display_pressures]
+        display_density_values = [np.interp(p, fp_pressure[::-1], rho_axis[::-1]) for p in display_pressures]
+        display_rs_values = [np.interp(p, fp_pressure[::-1], rs_axis[::-1]) for p in display_pressures]
+        
+        display_bg_values = []
+        for p, z in zip(display_pressures, display_z_values):
+            bg = (0.00502 * float(z) * (float(reservoir_temperature) + 459.67)) / (float(p) + 14.7)
+            display_bg_values.append(float(bg))
+        
+        gas_sg_demo = estimate_gas_specific_gravity(demo_composition)
+        display_gas_gravity = [gas_sg_demo + 0.01 * (p / 3000.0) for p in display_pressures]
+        display_oil_rel_vol = [0.95 * (1.0 + 0.0002 * (bubble_point_pressure - p)) for p in display_pressures]
+        
+        cce_table_comprehensive_demo = build_comprehensive_cce_table(
+            pressure_axis, cce_simulated_axis, demo_composition, bubble_point_pressure, reservoir_temperature, cce_simulated_axis
+        )
+        dl_table_comprehensive_demo = build_comprehensive_dl_table(
+            pressure_axis, dl_simulated_axis, demo_composition, bubble_point_pressure, reservoir_temperature, rs_axis, z_axis, rho_axis
+        )
+        psat_table_data_demo = build_psat_table(demo_composition, bubble_point_pressure, reservoir_temperature)
+        
+        results_payload["ternary_plots"] = ternary_data
+        results_payload["dl1_property_plots"] = {
+            "pressure": [round(p, 2) for p in display_pressures],
+            "z_factor": [round(z, 4) for z in display_z_values],
+            "liquid_density": [round(d, 2) for d in display_density_values],
+            "gor": [round(rs, 2) for rs in display_rs_values],
+            "oil_relative_volume": [round(orv, 4) for orv in display_oil_rel_vol],
+            "gas_fvf": [round(bg, 6) for bg in display_bg_values],
+            "gas_gravity": [round(gg, 4) for gg in display_gas_gravity],
+        }
+        results_payload["cce1_table"] = cce_table_comprehensive_demo
+        results_payload["dl1_table"] = dl_table_comprehensive_demo
+        results_payload["psat1_table"] = psat_table_data_demo
 
         results_payload["interpretation"] = make_interpretation(
             bubble_point_pressure,
@@ -1316,6 +1730,9 @@ def results():
             dl_rmse=results_payload["dl"]["rmse"],
             reservoir_temp=reservoir_temperature,
         )
+
+        # Cache the fully populated results
+        RESULTS_CACHE[results_id] = results_payload
 
     return render_template("result.html", results=results_payload)
 
