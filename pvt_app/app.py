@@ -713,200 +713,158 @@ def estimate_bubble_and_dew_pressures_vs_temperature(composition_dict, temperatu
 
 
 def build_phase_envelope_pt(composition_dict, operating_temperature_f, bubble_point_pressure, min_meas_pressure=None, max_meas_pressure=None):
-    """Build Pressure-Temperature phase envelope with operating-point anchoring."""
+    """
+    Build a P-T phase envelope matching the reference industry plot:
+
+    Reference observations (Image 2):
+      - Temperature axis: ~-300 F to ~700 F
+      - Bubble line (green): wide smooth dome, rises from left closure near 0,
+        passes through (reservoir_T, Pb) on the left ascending side,
+        peaks at cricondenbar (~2900 psi) well to the RIGHT of reservoir temp,
+        then descends slowly to meet dew at right closure.
+      - Dew line (red): stays near 0 psig across most of the temperature range,
+        only curling upward sharply near the right closure (cricondentherm).
+      - Both curves share left closure (low P) and right closure (low P).
+      - CCE1 = vertical cyan at reservoir_T spanning full y-axis.
+      - DL1  = horizontal yellow at Pb.
+    """
     heavy_fraction = float(composition_dict.get("c7+", 0.0) + composition_dict.get("c7", 0.0))
-    anchor_temperature_f = float(operating_temperature_f)
+    T_res = float(operating_temperature_f)
+    pb    = float(bubble_point_pressure)
 
-    # Derive a temperature window around the reservoir temperature influenced by composition
-    # and ensure a minimum spread to avoid degenerate envelopes.
-    base_below = 50.0
-    base_above = 70.0
-    temp_span_below = base_below + 30.0 * np.clip(heavy_fraction, 0.0, 1.0)
-    temp_span_above = base_above + 40.0 * np.clip(heavy_fraction, 0.0, 1.0)
-    temp_min_f = max(20.0, float(operating_temperature_f) - temp_span_below)
-    temp_max_f = min(700.0, float(operating_temperature_f) + temp_span_above)
-    if temp_max_f <= temp_min_f + 20.0:
-        temp_max_f = temp_min_f + 20.0
+    # ── Temperature axis ─────────────────────────────────────────────────────
+    # Reference spans roughly -300 to 700 F for a 220 F reservoir.
+    # Left span: ~500 F left of reservoir temp.
+    # Right span: ~480 F right of reservoir temp.
+    left_span  = 480.0 + 40.0 * np.clip(heavy_fraction, 0.0, 1.0)
+    right_span = 480.0 + 40.0 * np.clip(heavy_fraction, 0.0, 1.0)
 
-    base_axis = np.linspace(temp_min_f, temp_max_f, 241)
-    temperature_axis = np.unique(np.sort(np.append(base_axis, [float(operating_temperature_f), anchor_temperature_f])))
+    temp_min_f = T_res - left_span
+    temp_max_f = T_res + right_span
+    total_span = temp_max_f - temp_min_f
 
-    # Use a normalized coordinate along the envelope path.
-    x = np.linspace(0.0, 1.0, len(temperature_axis))
+    temperature_axis = np.unique(np.sort(
+        np.append(np.linspace(temp_min_f, temp_max_f, 401), [T_res])
+    ))
+    x = (temperature_axis - temp_min_f) / total_span   # normalised [0, 1]
 
-    # Closed low-temperature endpoint: prefer measurement-derived floor if available,
-    # otherwise fall back to a conservative fraction of Pb. This reduces hardcoded guardrails.
+    # ── Pressure key values ──────────────────────────────────────────────────
+    low_pressure            = max(2.0, 0.001 * pb)   # pinch at both ends
+    right_closure_pressure  = max(2.0, 0.001 * pb)
+
+    # Cricondenbar: peak of bubble curve. In reference it is ~20% above Pb.
+    cricondenbar_pressure = pb * (1.18 + 0.10 * np.clip(heavy_fraction, 0.0, 1.0))
+
+    # ── Normalized positions ──────────────────────────────────────────────────
+    # Reservoir temp position (left side of bubble dome — ascending part)
+    op_x = (T_res - temp_min_f) / total_span        # e.g. ~0.50 for 220 F
+
+    # Cricondenbar peak: well to the right of reservoir temp
+    # Reference shows it at roughly reservoir_T + 230 F
+    cricondenbar_T = T_res + 230.0 + 30.0 * np.clip(heavy_fraction, 0.0, 1.0)
+    cricondenbar_T = min(cricondenbar_T, temp_max_f - 0.05 * total_span)
+    x_peak = (cricondenbar_T - temp_min_f) / total_span
+
+    # Right closure / cricondentherm: near the far right
+    x_right_closure = 1.0   # rightmost point
+
+    # ── Bubble curve ──────────────────────────────────────────────────────────
+    # Shape: rises from left closure → passes through (T_res, Pb) →
+    #        peaks at cricondenbar → descends to right closure.
+    # Split into three segments: left-of-op, op-to-peak, peak-to-right.
+
+    bubble_curve = np.zeros_like(x)
+
+    # Segment 1: left closure → reservoir temp (ascending, power-law)
+    seg1 = x <= op_x
+    u1 = x[seg1] / max(op_x, 1e-9)
+    bubble_curve[seg1] = low_pressure + (pb - low_pressure) * (u1 ** 1.6)
+
+    # Segment 2: reservoir temp → cricondenbar peak (ascending, concave)
+    seg2 = (x > op_x) & (x <= x_peak)
+    u2 = (x[seg2] - op_x) / max(x_peak - op_x, 1e-9)
+    bubble_curve[seg2] = pb + (cricondenbar_pressure - pb) * (u2 ** 1.2)
+
+    # Segment 3: cricondenbar peak → right closure (descending)
+    seg3 = x > x_peak
+    u3 = (x[seg3] - x_peak) / max(x_right_closure - x_peak, 1e-9)
+    bubble_curve[seg3] = cricondenbar_pressure - (cricondenbar_pressure - right_closure_pressure) * (u3 ** 0.6)
+
+    # ── Dew curve ─────────────────────────────────────────────────────────────
+    # Reference: dew line stays near 0 across most of the range, only rises
+    # steeply near the cricondentherm (right closure). It forms the bottom of
+    # the teardrop lens.
+    # Shape: flat near 0 from left closure up to ~80% of the range,
+    #        then curves sharply up to meet the bubble curve at right closure.
+
+    dew_curve = np.zeros_like(x)
+    # Inflection point where dew starts rising: ~75-80% of the range
+    x_dew_rise = 0.76 + 0.04 * np.clip(heavy_fraction, 0.0, 1.0)
+
+    flat_mask = x <= x_dew_rise
+    rise_mask = ~flat_mask
+
+    # Flat/slowly rising left portion: near-zero pressure
+    u_flat = x[flat_mask] / max(x_dew_rise, 1e-9)
+    dew_curve[flat_mask] = low_pressure + (0.04 * cricondenbar_pressure - low_pressure) * (u_flat ** 3.0)
+
+    # Right rising portion: curves up sharply to meet right closure
+    u_rise = (x[rise_mask] - x_dew_rise) / max(1.0 - x_dew_rise, 1e-9)
+    dew_rise_peak = right_closure_pressure + (cricondenbar_pressure - right_closure_pressure) * 0.55
+    dew_curve[rise_mask] = (0.04 * cricondenbar_pressure) + (dew_rise_peak - 0.04 * cricondenbar_pressure) * (u_rise ** 1.5)
+
+    # ── Enforce exact closures ────────────────────────────────────────────────
+    bubble_curve[0]  = low_pressure
+    dew_curve[0]     = low_pressure
+    bubble_curve[-1] = right_closure_pressure
+    dew_curve[-1]    = right_closure_pressure
+
+    # ── Pin bubble at (T_res, Pb) ─────────────────────────────────────────────
+    op_index = int(np.abs(temperature_axis - T_res).argmin())
+    bubble_curve[op_index] = pb
+
+    # ── Ensure dew never exceeds bubble (dew is always lower) ─────────────────
+    for idx in range(len(temperature_axis)):
+        dew_curve[idx] = min(float(dew_curve[idx]), float(bubble_curve[idx]) * 0.55)
+    dew_curve[0]  = low_pressure
+    dew_curve[-1] = right_closure_pressure
+
+    # ── Smooth bubble curve with spline ──────────────────────────────────────
     try:
-        if min_meas_pressure is not None and float(min_meas_pressure) > 0:
-            low_pressure = max(1.0, float(min_meas_pressure) * 0.75)
-        else:
-            low_pressure = max(250.0, 0.22 * float(bubble_point_pressure))
+        sp = UnivariateSpline(temperature_axis, bubble_curve, k=3, s=len(temperature_axis) * 500)
+        smoothed_b = sp(temperature_axis)
+        smoothed_b[0]        = low_pressure
+        smoothed_b[-1]       = right_closure_pressure
+        smoothed_b[op_index] = pb
+        bubble_curve = smoothed_b
     except Exception:
-        low_pressure = max(250.0, 0.22 * float(bubble_point_pressure))
+        pass
 
-    # Force the bubble branch to pass exactly through the operating point.
-    # Operating point position along the normalized axis (prefer data-driven location,
-    # clamp to avoid degenerate shapes).
-    op_x = (anchor_temperature_f - temp_min_f) / max(temp_max_f - temp_min_f, 1.0)
-    op_x = float(np.clip(op_x, 0.05, 0.95))
-    bubble_peak_pressure = float(bubble_point_pressure)
+    # ── Derived landmarks ─────────────────────────────────────────────────────
+    interior_bubble = np.asarray(bubble_curve[1:-1], dtype=float)
+    cricondenbar_index = int(np.argmax(interior_bubble)) + 1 if interior_bubble.size > 0 else op_index
 
-    # Keep the upper closure near the measured bubble point or measurement-derived ceiling.
-    try:
-        if max_meas_pressure is not None and float(max_meas_pressure) > 0:
-            high_pressure = max(float(max_meas_pressure) * 1.05, bubble_peak_pressure * 1.05)
-        else:
-            high_pressure = bubble_peak_pressure * (1.14 + 0.08 * np.clip(heavy_fraction, 0.0, 0.8))
-            high_pressure = float(np.clip(high_pressure, bubble_peak_pressure + 120.0, bubble_peak_pressure * 1.35))
-    except Exception:
-        high_pressure = bubble_peak_pressure * (1.14 + 0.08 * np.clip(heavy_fraction, 0.0, 0.8))
-        high_pressure = float(np.clip(high_pressure, bubble_peak_pressure + 120.0, bubble_peak_pressure * 1.35))
-
-    # Bubble branch: smooth, concave rise from the left closure to the operating point,
-    # then continues upward to the right closure.
-    bubble_curve = np.empty_like(x)
-    left_mask = x <= op_x
-    right_mask = ~left_mask
-
-    left_u = np.zeros_like(x)
-    left_u[left_mask] = x[left_mask] / max(op_x, 1e-6)
-    left_shape = left_u[left_mask] ** (0.72 + 0.10 * np.clip(heavy_fraction, 0.0, 0.8))
-    bubble_curve[left_mask] = low_pressure + (bubble_peak_pressure - low_pressure) * left_shape
-
-    right_u = np.zeros_like(x)
-    right_u[right_mask] = (x[right_mask] - op_x) / max(1.0 - op_x, 1e-6)
-    right_shape = right_u[right_mask] ** (1.10 + 0.08 * np.clip(heavy_fraction, 0.0, 0.8))
-    bubble_curve[right_mask] = bubble_peak_pressure + (high_pressure - bubble_peak_pressure) * right_shape
-
-    # Dew branch: same closures, with an interior maximum (cricondenbar) well above Pb.
-    # Peak location for the dew branch adjusts slightly with heaviness
-    x_peak = 0.58 - 0.03 * np.clip(heavy_fraction, 0.0, 1.0)
-    x_peak = float(np.clip(x_peak, 0.50, 0.80))
-
-    # Compute a data-driven dew peak pressure using available measurement ceilings and composition.
-    try:
-        meas_span = None
-        if max_meas_pressure is not None and float(max_meas_pressure) > float(bubble_point_pressure):
-            meas_span = float(max_meas_pressure) - float(bubble_point_pressure)
-    except Exception:
-        meas_span = None
-
-    # Base margin informed by bubble point and heaviness
-    base_margin = max(20.0, 0.03 * float(bubble_point_pressure))
-    if meas_span is not None and meas_span > 0:
-        meas_margin = max(base_margin, 0.10 * meas_span)
-    else:
-        meas_margin = base_margin
-
-    # Scale margin with heavy fraction to allow larger cricondenbar for heavy fluids
-    margin = meas_margin * (1.0 + 0.5 * np.clip(heavy_fraction, 0.0, 1.0))
-
-    dew_peak_pressure_candidates = [
-        float(bubble_peak_pressure) + 1.5 * margin,
-        (float(max_meas_pressure) if max_meas_pressure is not None and float(max_meas_pressure) > 0 else float(bubble_peak_pressure) * 1.02),
-        float(bubble_peak_pressure) * (1.02 + 0.04 * np.clip(heavy_fraction, 0.0, 1.0)),
-    ]
-    dew_peak_pressure = float(max(dew_peak_pressure_candidates))
-    dew_peak_pressure = float(np.clip(dew_peak_pressure, float(bubble_peak_pressure) + 50.0, float(bubble_peak_pressure) * 1.6))
-
-    dew_curve = np.empty_like(x)
-    left_mask = x <= x_peak
-    right_mask = ~left_mask
-
-    left_u = np.zeros_like(x)
-    left_u[left_mask] = x[left_mask] / max(x_peak, 1e-6)
-    dew_curve[left_mask] = low_pressure + (dew_peak_pressure - low_pressure) * (left_u[left_mask] ** 1.55)
-
-    right_u = np.zeros_like(x)
-    right_u[right_mask] = (x[right_mask] - x_peak) / max(1.0 - x_peak, 1e-6)
-    dew_curve[right_mask] = dew_peak_pressure - (dew_peak_pressure - high_pressure) * (right_u[right_mask] ** 1.10)
-
-    # Enforce exact closure at both ends.
-    bubble_curve[0] = low_pressure
-    dew_curve[0] = low_pressure
-    bubble_curve[-1] = high_pressure
-    dew_curve[-1] = high_pressure
-
-    # Force the operating point exactly onto the bubble curve.
-    op_index = int(np.abs(temperature_axis - anchor_temperature_f).argmin())
-    bubble_curve[op_index] = float(bubble_point_pressure)
-    dew_curve[op_index] = max(dew_curve[op_index], float(bubble_point_pressure) + 150.0)
-
-    # Keep dew above bubble everywhere except the shared closures.
-    # Enforce dew stays above bubble by a measurement/composition-driven margin
-    for idx in range(1, len(temperature_axis) - 1):
-        dew_curve[idx] = max(float(dew_curve[idx]), float(bubble_curve[idx]) + float(margin))
-
-    # Smooth the dew curve using a spline to ensure a single continuous curve
-    # from the divergence region through the critical region.
-    try:
-        temp_axis = np.asarray(temperature_axis, dtype=float)
-        dew_vals = np.asarray(dew_curve, dtype=float)
-
-        # Handle NaNs by linear interpolation over finite values
-        finite = np.isfinite(dew_vals)
-        if finite.sum() < 3:
-            smoothed_dew = dew_vals.copy()
-        else:
-            try:
-                spline = UnivariateSpline(temp_axis[finite], dew_vals[finite], k=3, s=0.0)
-                smoothed_dew = spline(temp_axis)
-            except Exception:
-                # Fall back to CubicSpline
-                try:
-                    cubic = CubicSpline(temp_axis[finite], dew_vals[finite], bc_type='natural')
-                    smoothed_dew = cubic(temp_axis)
-                except Exception:
-                    smoothed_dew = dew_vals.copy()
-
-        # Preserve endpoint closures and ensure dew > bubble margin
-        smoothed_dew[0] = low_pressure
-        smoothed_dew[-1] = high_pressure
-        for idx in range(1, len(smoothed_dew) - 1):
-            smoothed_dew[idx] = max(float(smoothed_dew[idx]), float(bubble_curve[idx]) + 40.0)
-
-        dew_curve = smoothed_dew
-    except Exception:
-        dew_curve = np.asarray(dew_curve, dtype=float)
-
-    # Cricondenbar: highest pressure on the entire dew curve (exclude closures)
-    interior_dew = np.asarray(dew_curve[1:-1], dtype=float)
-    if interior_dew.size > 0:
-        cricondenbar_index = int(np.argmax(interior_dew)) + 1
-    else:
-        cricondenbar_index = 0
-
-    # Critical point: point of minimum separation between dew and bubble curves
-    diff = np.abs(np.asarray(dew_curve, dtype=float) - np.asarray(bubble_curve, dtype=float))
-    interior_diff = diff[1:-1]
-    if interior_diff.size > 0:
-        critical_index = int(np.argmin(interior_diff)) + 1
-    else:
-        critical_index = len(temperature_axis) - 1
-
+    # Critical point = rightmost closure where bubble ≈ dew
+    critical_index    = len(temperature_axis) - 1
     critical_temperature = float(temperature_axis[critical_index])
-    critical_pressure = float((float(dew_curve[critical_index]) + float(bubble_curve[critical_index])) / 2.0)
+    critical_pressure    = float((bubble_curve[critical_index] + dew_curve[critical_index]) / 2.0)
 
-    # Cricondentherm: rightmost (highest temperature) point on the envelope
-    cricondentherm_index = len(temperature_axis) - 1
+    cricondentherm_index       = len(temperature_axis) - 1
     cricondentherm_temperature = float(temperature_axis[cricondentherm_index])
-    cricondentherm_pressure = float(dew_curve[cricondentherm_index])
-    # Ensure cricondentherm pressure lies below the critical pressure by at least the margin
-    if cricondentherm_pressure >= critical_pressure:
-        cricondentherm_pressure = max(min(cricondentherm_pressure, critical_pressure - margin / 2.0), 1.0)
+    cricondentherm_pressure    = float(bubble_curve[cricondentherm_index])
 
     return {
-        "temperature": [float(value) for value in temperature_axis],
-        "bubble_pressure": [float(value) for value in bubble_curve],
-        "dew_pressure": [float(value) for value in dew_curve],
-        "critical_temperature": critical_temperature,
-        "critical_pressure": critical_pressure,
-        "closure_temperature": float(temperature_axis[0]),
-        "closure_pressure": float(low_pressure),
+        "temperature":              [float(v) for v in temperature_axis],
+        "bubble_pressure":          [float(v) for v in bubble_curve],
+        "dew_pressure":             [float(v) for v in dew_curve],
+        "critical_temperature":     critical_temperature,
+        "critical_pressure":        critical_pressure,
+        "closure_temperature":      float(temperature_axis[0]),
+        "closure_pressure":         float(low_pressure),
         "cricondentherm_temperature": cricondentherm_temperature,
-        "cricondentherm_pressure": cricondentherm_pressure,
-        "cricondenbar_temperature": float(temperature_axis[cricondenbar_index]) if cricondenbar_index < len(temperature_axis) else float(temperature_axis[0]),
-        "cricondenbar_pressure": float(dew_curve[cricondenbar_index]) if cricondenbar_index < len(dew_curve) else float(dew_curve[0]),
+        "cricondentherm_pressure":  cricondentherm_pressure,
+        "cricondenbar_temperature": float(temperature_axis[cricondenbar_index]),
+        "cricondenbar_pressure":    float(bubble_curve[cricondenbar_index]),
     }
 
 
@@ -2444,6 +2402,7 @@ def analyze():
             "maximum": float(maximum_pressure),
         },
         "bubble_point_pressure": bubble_point_pressure,
+        "composition_dict": {k: float(v) for k, v in composition_dict.items()},
         # CCE and DL datasets will be attached below after computing comparison tables and RMSE
         "simulation_properties": simulation_properties_table,
         "submitted_inputs": {
@@ -2905,6 +2864,99 @@ def analyze():
     session.pop("pvt_results", None)
     session["pvt_results_id"] = results_id
     return redirect(url_for("results"))
+
+
+@app.route("/ternary_data", methods=["GET"])
+def ternary_data():
+    """Return ternary composition data for a user-specified pressure."""
+    from flask import jsonify
+
+    pressure_raw = request.args.get("pressure", "")
+    pressure = parse_numeric_field(pressure_raw, None)
+    if pressure is None or pressure <= 0:
+        return jsonify({"error": "Invalid pressure value"}), 400
+
+    results_id = session.get("pvt_results_id")
+    payload = RESULTS_CACHE.get(results_id) if results_id else None
+    if not payload:
+        return jsonify({"error": "No analysis results found. Please run an analysis first."}), 404
+
+    composition_dict = payload.get("composition_dict", {})
+    reservoir_temperature = payload.get("reservoir_temperature", 220.0)
+    bubble_point_pressure = payload.get("bubble_point_pressure", pressure)
+
+    if not composition_dict:
+        return jsonify({"error": "Composition data not available."}), 404
+
+    # Grouped composition point (pressure-independent — same composition groups)
+    c1 = float(composition_dict.get("c1", 0.0))
+    c2_c6 = float(
+        composition_dict.get("c2", 0.0)
+        + composition_dict.get("c3", 0.0)
+        + composition_dict.get("ic4", 0.0)
+        + composition_dict.get("nc4", 0.0)
+        + composition_dict.get("ic5", 0.0)
+        + composition_dict.get("nc5", 0.0)
+        + composition_dict.get("c6", 0.0)
+    )
+    c7_plus = float(composition_dict.get("c7", 0.0) + composition_dict.get("c7+", 0.0))
+    total = max(c1 + c2_c6 + c7_plus, 1e-9)
+
+    # Scale percentages to 0-100
+    c1_pct = round(float(c1 / total) * 100.0, 2)
+    c2_c6_pct = round(float(c2_c6 / total) * 100.0, 2)
+    c7_plus_pct = round(float(c7_plus / total) * 100.0, 2)
+
+    # Build a pressure-scaled two-phase envelope around the composition point.
+    # The envelope shrinks as pressure increases (toward miscibility).
+    bubble_p = max(float(bubble_point_pressure), 1.0)
+    p = max(float(pressure), 1.0)
+    pressure_ratio = float(np.clip(p / bubble_p, 0.1, 3.0))
+
+    # Base envelope size (fraction of ternary space) decreases with pressure
+    size = float(np.clip(0.55 * np.exp(-0.55 * (pressure_ratio - 0.3)), 0.05, 0.55))
+
+    # Anchor the envelope near the C1 apex and shape it around the fluid point
+    cx, cy, cz = c1_pct, c2_c6_pct, c7_plus_pct  # centroid ~ fluid composition
+    # Build a closed polygon (9 points + closing repeat) scaled by `size`
+    angles = np.linspace(0, 2 * np.pi, 10)[:-1]
+    # Ellipse in ternary space: stretch along C1 axis
+    raw_a = cx + size * 40.0 * np.cos(angles)
+    raw_b = cy + size * 20.0 * np.sin(angles)
+    raw_c = 100.0 - raw_a - raw_b
+
+    # Clip to valid ternary range and close polygon
+    env_a, env_b, env_c = [], [], []
+    for a, b, c in zip(raw_a, raw_b, raw_c):
+        a = float(np.clip(a, 0, 100))
+        b = float(np.clip(b, 0, 100))
+        c = float(np.clip(c, 0, 100))
+        s = a + b + c
+        if s > 0:
+            a, b, c = a / s * 100, b / s * 100, c / s * 100
+        env_a.append(round(a, 2))
+        env_b.append(round(b, 2))
+        env_c.append(round(c, 2))
+
+    # Close the polygon
+    env_a.append(env_a[0])
+    env_b.append(env_b[0])
+    env_c.append(env_c[0])
+
+    return jsonify({
+        "pressure": round(float(pressure), 2),
+        "temperature": round(float(reservoir_temperature), 1),
+        "fluid": {
+            "c1": c1_pct,
+            "c2_c6": c2_c6_pct,
+            "c7_plus": c7_plus_pct,
+        },
+        "envelope": {
+            "a": env_a,   # C1 axis
+            "b": env_b,   # C2-C6 axis
+            "c": env_c,   # C7+ axis
+        },
+    })
 
 
 @app.route("/results")

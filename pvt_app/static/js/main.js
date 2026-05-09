@@ -1136,120 +1136,132 @@ function initializeCharts() {
             ?? resultData.pressure_range?.maximum
             ?? null;
 
-        // Bubble point chart removed — integrated into phase envelope display
-
         // Phase envelope plot using Plotly
-        const phaseLoopTemperature = [...resultData.phaseEnvelope.temperature, ...[...resultData.phaseEnvelope.temperature].slice().reverse()];
-        const phaseLoopPressure = [...resultData.phaseEnvelope.bubblePressure, ...[...resultData.phaseEnvelope.dewPressure].slice().reverse()];
 
-        // Build the six-variable phase plot: Bubble, Dew, Closed Envelope, Fixed V=0.50, Critical Point
+        // Build phase plot matching reference: Bubble (green), Dew (red),
+        // Fixed V=0.50 (magenta), Critical Point (black diamond),
+        // CCE1 vertical (cyan), DL1 horizontal (yellow)
+
+        // Fixed V=0.50 locus: midpoint between bubble and dew at each temperature
         const fixedVTemp = resultData.phaseEnvelope.temperature.slice();
         const fixedVPressure = fixedVTemp.map((t, i) => {
             const b = Number(resultData.phaseEnvelope.bubblePressure[i]);
             const d = Number(resultData.phaseEnvelope.dewPressure[i]);
-            // Approximate V=0.50 locus as midpoint between bubble and dew
             return 0.5 * (b + d);
         });
 
+        const allPressures = [
+            ...resultData.phaseEnvelope.bubblePressure,
+            ...resultData.phaseEnvelope.dewPressure,
+        ].map(Number).filter(Number.isFinite);
+        const allTemps = resultData.phaseEnvelope.temperature.map(Number).filter(Number.isFinite);
+        // Round yMax up to a clean tick so CCE1 visually spans the full chart height
+        const rawYMax = Math.max(...allPressures);
+        const yAxisMax = Math.ceil(rawYMax * 1.20 / 500) * 500;
+        const xMin = Math.min(...allTemps);
+        const xMax = Math.max(...allTemps);
+
         const phaseTraces = [
+            // ZI: Bubble line — green
             {
                 x: resultData.phaseEnvelope.temperature,
                 y: resultData.phaseEnvelope.bubblePressure,
-                name: 'Bubble Line',
+                name: 'ZI: Bubble line',
                 type: 'scatter',
                 mode: 'lines',
-                line: { color: '#16a34a', width: 2.2 },
+                line: { color: '#00aa00', width: 2 },
             },
+            // ZI: Dew line — red
             {
                 x: resultData.phaseEnvelope.temperature,
                 y: resultData.phaseEnvelope.dewPressure,
-                name: 'Dew Line',
+                name: 'ZI: Dew line',
                 type: 'scatter',
                 mode: 'lines',
-                line: { color: '#e11d48', width: 2.2 },
+                line: { color: '#dd0000', width: 2 },
             },
-            {
-                x: phaseLoopTemperature,
-                y: phaseLoopPressure,
-                name: 'Closed Phase Envelope',
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: 'rgba(13, 110, 253, 0.25)', width: 1.5 },
-                fill: 'toself',
-                fillcolor: 'rgba(13, 110, 253, 0.08)',
-                hoverinfo: 'skip',
-                showlegend: false,
-            },
+            // ZI: Fixed Vapor Fraction V=0.50 — magenta/pink
             {
                 x: fixedVTemp,
                 y: fixedVPressure,
-                name: 'Fixed Vapor Fraction (V = 0.50)',
+                name: 'ZI: Fixed Vapor Fraction Line (V= 0.50)',
                 type: 'scatter',
                 mode: 'lines',
-                line: { color: '#c026d3', width: 2 },
+                line: { color: '#ff00cc', width: 1.5, dash: 'solid' },
             },
         ];
 
-        const criticalTemp = Number(resultData.phaseEnvelope.criticalTemperature ?? resultData.phaseEnvelope.cricondenthermTemperature);
-        const criticalPressure = Number(resultData.phaseEnvelope.criticalPressure ?? resultData.phaseEnvelope.cricondenthermPressure);
+        // Critical Point — black diamond
+        const criticalTemp = Number(resultData.phaseEnvelope.criticalTemperature ?? resultData.phaseEnvelope.cricondenbarTemperature);
+        const criticalPressure = Number(resultData.phaseEnvelope.criticalPressure ?? resultData.phaseEnvelope.cricondenbarPressure);
         if (Number.isFinite(criticalTemp) && Number.isFinite(criticalPressure)) {
             phaseTraces.push({
                 x: [criticalTemp],
                 y: [criticalPressure],
-                name: 'Critical Point',
+                name: 'ZI: Critical Point',
                 type: 'scatter',
                 mode: 'markers',
-                marker: { size: 12, color: '#111827', symbol: 'diamond' },
+                marker: { size: 10, color: '#000000', symbol: 'diamond' },
             });
         }
 
-        // Add CCE1 trace (Constant Composition Expansion) - vertical line at reservoir temperature
-        if (resultData.cce && resultData.cce.pressure && resultData.cce.pressure.length > 0 && operatingPointTemperature) {
-            const cceStartPressure = Number(resultData.cce.pressure[0]);
-            const minPressure = Math.min(...resultData.phaseEnvelope.bubblePressure, ...resultData.phaseEnvelope.dewPressure);
-            const maxPressure = Math.max(...resultData.phaseEnvelope.bubblePressure, ...resultData.phaseEnvelope.dewPressure);
-            if (Number.isFinite(cceStartPressure)) {
+        // CCE1: vertical line at reservoir temperature — cyan, spans 0 to top of chart
+        if (operatingPointTemperature) {
+            const T = Number(operatingPointTemperature);
+            if (Number.isFinite(T)) {
                 phaseTraces.push({
-                    x: [operatingPointTemperature, operatingPointTemperature],
-                    y: [minPressure, maxPressure],
+                    x: [T, T],
+                    y: [0, yAxisMax],
                     name: 'CCE1',
                     type: 'scatter',
                     mode: 'lines',
-                    line: { color: '#06b6d4', width: 2.2 },
+                    line: { color: '#00ccff', width: 2 },
                 });
             }
         }
 
-        // Add DL1 trace (Differential Liberation) - horizontal line at maximum DL pressure
-        if (resultData.dl && resultData.dl.pressure && resultData.dl.pressure.length > 0) {
-            const dlMaxPressure = Math.max(...resultData.dl.pressure.map(p => Number(p)));
-            if (Number.isFinite(dlMaxPressure)) {
-                const minTemp = Math.min(...resultData.phaseEnvelope.temperature);
-                const maxTemp = Math.max(...resultData.phaseEnvelope.temperature);
-                phaseTraces.push({
-                    x: [minTemp, maxTemp],
-                    y: [dlMaxPressure, dlMaxPressure],
-                    name: 'DL1',
-                    type: 'scatter',
-                    mode: 'lines',
-                    line: { color: '#1f77b4', width: 2.2 },
-                });
-            }
+        // DL1: horizontal line at bubble point pressure — yellow, spans full x range
+        const dlBubblePressure = Number(
+            operatingPointPressure ??
+            (resultData.dl?.pressure ? Math.max(...resultData.dl.pressure.map(Number)) : null)
+        );
+        if (Number.isFinite(dlBubblePressure)) {
+            phaseTraces.push({
+                x: [xMin, xMax],
+                y: [dlBubblePressure, dlBubblePressure],
+                name: 'DL1',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#ffcc00', width: 2.5 },
+            });
         }
 
         const phaseLayout = {
-            title: 'Phase Envelope (P-T)',
+            title: { text: 'Phase Plot: Sample ZI', font: { size: 14 } },
             xaxis: {
-                title: 'Temperature (°F)',
-                zeroline: false,
+                title: { text: 'Temperature  F', font: { size: 12 } },
+                zeroline: true,
+                zerolinecolor: '#888',
+                zerolinewidth: 1,
+                showgrid: true,
+                gridcolor: '#cccccc',
+                range: [xMin, xMax],
             },
             yaxis: {
-                title: 'Pressure (psig)',
-                zeroline: false,
+                title: { text: 'Pressure  psig', font: { size: 12 }, standoff: 10 },
+                zeroline: true,
+                zerolinecolor: '#888',
+                zerolinewidth: 1,
+                showgrid: true,
+                gridcolor: '#cccccc',
+                range: [0, yAxisMax],
             },
+            legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#ccc', borderwidth: 1, font: { size: 11 } },
             hovermode: 'closest',
-            height: 320,
-            margin: { t: 40, r: 20, b: 60, l: 60 },
+            height: 420,
+            margin: { t: 50, r: 30, b: 60, l: 70 },
+            plot_bgcolor: '#ffffff',
+            paper_bgcolor: '#ffffff',
         };
 
         Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
@@ -1359,123 +1371,202 @@ function initializeCharts() {
             return traces;
         }
         
+        // ---- Ternary rendering helper ----
+        function buildTernaryLayout(temperature, pressure) {
+            return {
+                title: { text: `Ternary plot for ZI (T=${temperature}°F, P=${pressure} psi)`, font: { size: 13 }, y: 0.97, yanchor: 'top' },
+                ternary: {
+                    sum: 100,
+                    bgcolor: '#ffffff',
+                    domain: { x: [0.05, 0.95], y: [0.02, 0.88] },
+                    aaxis: {
+                        title: 'C1 (%)', min: 0, tick0: 0, dtick: 10, ticks: 'outside',
+                        ticklen: 4, gridcolor: '#000000', gridwidth: 0.8,
+                        linecolor: '#000000', linewidth: 1, tickfont: { size: 11 },
+                        showline: true, showgrid: true,
+                    },
+                    baxis: {
+                        title: 'C7+ (%)', min: 0, tick0: 0, dtick: 10, ticks: 'outside',
+                        ticklen: 4, gridcolor: '#000000', gridwidth: 0.8,
+                        linecolor: '#000000', linewidth: 1, tickfont: { size: 11 },
+                        showline: true, showgrid: true,
+                    },
+                    caxis: {
+                        title: 'C2-C6 (%)', min: 0, tick0: 0, dtick: 10, ticks: 'outside',
+                        ticklen: 4, gridcolor: '#000000', gridwidth: 0.8,
+                        linecolor: '#000000', linewidth: 1, tickfont: { size: 11 },
+                        showline: true, showgrid: true,
+                    },
+                },
+                height: 420,
+                margin: { t: 36, r: 40, b: 36, l: 40 },
+                font: { size: 11 },
+                paper_bgcolor: '#ffffff',
+                showlegend: true,
+                legend: { x: 0.02, y: 0.99, bgcolor: 'rgba(255,255,255,0.8)', font: { size: 11 } },
+            };
+        }
+
+        function setTernaryContainerHeight(chartId) {
+            const el = document.getElementById(chartId);
+            if (el) { el.style.height = '420px'; el.style.minHeight = ''; }
+        }
+
+        function renderTernaryFromData(chartId, data) {
+            setTernaryContainerHeight(chartId);
+            const { pressure, temperature, fluid, envelope } = data;
+
+            const shadedTrace = {
+                a: envelope.a,
+                b: envelope.c,  // b-axis = C7+, maps to c7_plus
+                c: envelope.b,  // c-axis = C2-C6, maps to c2_c6
+                type: 'scatterternary',
+                mode: 'lines',
+                line: { color: '#1a6b1a', width: 2 },
+                fill: 'toself',
+                fillcolor: 'rgba(34, 139, 34, 0.20)',
+                hoverinfo: 'skip',
+                showlegend: true,
+                name: 'Two-phase envelope',
+            };
+
+            const ternaryTrace = {
+                a: [fluid.c1],
+                b: [fluid.c7_plus],
+                c: [fluid.c2_c6],
+                type: 'scatterternary',
+                mode: 'markers',
+                marker: {
+                    size: 12, color: '#0d6efd', symbol: 'circle',
+                    line: { color: '#111111', width: 2 },
+                },
+                text: [`C1: ${fluid.c1.toFixed(2)}%<br>C2-C6: ${fluid.c2_c6.toFixed(2)}%<br>C7+: ${fluid.c7_plus.toFixed(2)}%`],
+                hovertemplate: '%{text}<extra></extra>',
+                name: 'Fluid composition',
+            };
+
+            Plotly.newPlot(chartId, [shadedTrace, ternaryTrace], buildTernaryLayout(temperature, pressure), { responsive: true });
+        }
+
+        function renderTernaryFromStaticEnvelope(chartId, pressure, temperature, envelopePoints, fp) {
+            setTernaryContainerHeight(chartId);
+            const boundaryA = envelopePoints.map((v) => v[0]);
+            const boundaryB = envelopePoints.map((v) => v[1]);
+            const boundaryC = envelopePoints.map((v) => v[2]);
+
+            const shadedTrace = {
+                a: boundaryA, b: boundaryB, c: boundaryC,
+                type: 'scatterternary', mode: 'lines',
+                line: { color: '#1a6b1a', width: 2 },
+                fill: 'toself', fillcolor: 'rgba(34, 139, 34, 0.20)',
+                hoverinfo: 'skip', showlegend: true, name: 'Two-phase envelope',
+            };
+
+            const hatchTraces = buildHatchTraces(envelopePoints, 10);
+
+            const ternaryTrace = {
+                a: [fp.c1], b: [fp.c7], c: [fp.c2c6],
+                type: 'scatterternary', mode: 'markers',
+                marker: { size: 12, color: '#0d6efd', symbol: 'circle', line: { color: '#111111', width: 2 } },
+                text: [`C1: ${fp.c1.toFixed(2)}%<br>C2-C6: ${fp.c2c6.toFixed(2)}%<br>C7+: ${fp.c7.toFixed(2)}%`],
+                hovertemplate: '%{text}<extra></extra>',
+                name: 'Fluid composition',
+            };
+
+            Plotly.newPlot(chartId, [shadedTrace, ...hatchTraces, ternaryTrace], buildTernaryLayout(temperature, pressure), { responsive: true });
+        }
+
+        async function fetchAndRenderTernary(chartId, subtitleId, pressure) {
+            const pressure_num = parseFloat(pressure);
+            if (!Number.isFinite(pressure_num) || pressure_num <= 0) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/ternary_data?pressure=${encodeURIComponent(pressure_num)}`);
+                if (!response.ok) {
+                    console.error(`Ternary API error: ${response.status}`);
+                    return;
+                }
+                const data = await response.json();
+                if (data.error) {
+                    console.error(`Ternary data error: ${data.error}`);
+                    return;
+                }
+
+                renderTernaryFromData(chartId, data);
+
+                const subtitleNode = document.getElementById(subtitleId);
+                if (subtitleNode) {
+                    subtitleNode.textContent = `Ternary plot for ZI (T=${data.temperature}°F, P=${pressure_num} psi)`;
+                }
+            } catch (err) {
+                console.error('Ternary fetch failed:', err);
+            }
+        }
+
+        const defaultPressures = [2000, 4000, 6000];
+
         for (let i = 0; i < 3; i++) {
             try {
-                const ternaryPressure = [2000, 4000, 6000][i];
+                const chartId = ternaryChartIds[i];
+                const subtitleId = ternarySubtitleIds[i];
+                const saveId = ternarySaveIds[i];
+                const defaultPressure = defaultPressures[i];
                 const ternaryTemperature = 220;
-                const envelopePoints = envelopeByPressure[ternaryPressure];
+                const envelopePoints = envelopeByPressure[defaultPressure];
 
-                const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
+                // Inject pressure input row above the chart container
+                const chartEl = document.getElementById(chartId);
+                // Remove any fixed height on the chart container so it hugs the Plotly canvas
+                if (chartEl) {
+                    chartEl.style.height = '';
+                    chartEl.style.minHeight = '';
+                }
+                if (chartEl && !chartEl.previousElementSibling?.classList.contains('ternary-pressure-control')) {
+                    const controlRow = document.createElement('div');
+                    controlRow.className = 'ternary-pressure-control d-flex align-items-center gap-2 mb-2';
+                    controlRow.innerHTML = `
+                        <label class="form-label mb-0 text-nowrap small fw-semibold">Pressure (psi):</label>
+                        <input
+                            type="number"
+                            class="form-control form-control-sm"
+                            style="max-width:130px;"
+                            value="${defaultPressure}"
+                            min="1"
+                            step="any"
+                            inputmode="decimal"
+                            id="ternaryPressureInput${i}"
+                            placeholder="e.g. ${defaultPressure}"
+                        >
+                        <button type="button" class="btn btn-sm btn-primary flex-shrink-0" id="ternaryUpdateBtn${i}">Update</button>
+                    `;
+                    chartEl.parentElement.insertBefore(controlRow, chartEl);
+                }
+
+                // Render default view using static envelope
+                const subtitleNode = document.getElementById(subtitleId);
                 if (subtitleNode) {
-                    subtitleNode.textContent = `Ternary plot for ZI (T=220°F, P=${ternaryPressure} psi)`;
+                    subtitleNode.textContent = `Ternary plot for ZI (T=${ternaryTemperature}°F, P=${defaultPressure} psi)`;
                 }
-
-                const saveButton = document.getElementById(ternarySaveIds[i]);
+                const saveButton = document.getElementById(saveId);
                 if (saveButton) {
-                    saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_ZI_${ternaryPressure}psi')`);
+                    saveButton.setAttribute('onclick', `savePNG('${chartId}', 'Ternary_ZI_${defaultPressure}psi')`);
                 }
 
-                // polygon is already closed (first === last point), use directly
-                const boundaryA = envelopePoints.map((v) => v[0]);
-                const boundaryB = envelopePoints.map((v) => v[1]);
-                const boundaryC = envelopePoints.map((v) => v[2]);
+                renderTernaryFromStaticEnvelope(chartId, defaultPressure, ternaryTemperature, envelopePoints, fluidPoint);
 
-                const shadedTrace = {
-                    a: boundaryA,
-                    b: boundaryB,
-                    c: boundaryC,
-                    type: 'scatterternary',
-                    mode: 'lines',
-                    line: {
-                        color: '#1a6b1a',
-                        width: 2,
-                    },
-                    fill: 'toself',
-                    fillcolor: 'rgba(34, 139, 34, 0.20)',
-                    hoverinfo: 'skip',
-                    showlegend: true,
-                    name: 'Two-phase envelope'
-                };
+                // Wire up Update button
+                const updateBtn = document.getElementById(`ternaryUpdateBtn${i}`);
+                const pressureInput = document.getElementById(`ternaryPressureInput${i}`);
 
-                const hatchTraces = buildHatchTraces(envelopePoints, 10);
-
-                const ternaryTrace = {
-                    a: [fluidPoint.c1],
-                    b: [fluidPoint.c7],
-                    c: [fluidPoint.c2c6],
-                    type: 'scatterternary',
-                    mode: 'markers',
-                    marker: {
-                        size: 12,
-                        color: '#0d6efd',
-                        symbol: 'circle',
-                        line: { color: '#111111', width: 2 }
-                    },
-                    text: [`C1: ${fluidPoint.c1.toFixed(2)}%<br>C2-C6: ${fluidPoint.c2c6.toFixed(2)}%<br>C7+: ${fluidPoint.c7.toFixed(2)}%`],
-                    hovertemplate: '%{text}<extra></extra>',
-                    name: 'Fluid composition'
-                };
-                
-                const ternaryLayout = {
-                    title: `Ternary plot for ZI (T=${ternaryTemperature}°F, P=${ternaryPressure} psi)`,
-                    ternary: {
-                        sum: 100,
-                        bgcolor: '#ffffff',
-                        aaxis: {
-                            title: 'C1 (%)',
-                            min: 0,
-                            tick0: 0,
-                            dtick: 10,
-                            ticks: 'outside',
-                            ticklen: 4,
-                            gridcolor: '#000000',
-                            gridwidth: 0.8,
-                            linecolor: '#000000',
-                            linewidth: 1,
-                            tickfont: { size: 12 },
-                            showline: true,
-                            showgrid: true,
-                        },
-                        baxis: {
-                            title: 'C7+ (%)',
-                            min: 0,
-                            tick0: 0,
-                            dtick: 10,
-                            ticks: 'outside',
-                            ticklen: 4,
-                            gridcolor: '#000000',
-                            gridwidth: 0.8,
-                            linecolor: '#000000',
-                            linewidth: 1,
-                            tickfont: { size: 12 },
-                            showline: true,
-                            showgrid: true,
-                        },
-                        caxis: {
-                            title: 'C2-C6 (%)',
-                            min: 0,
-                            tick0: 0,
-                            dtick: 10,
-                            ticks: 'outside',
-                            ticklen: 4,
-                            gridcolor: '#000000',
-                            gridwidth: 0.8,
-                            linecolor: '#000000',
-                            linewidth: 1,
-                            tickfont: { size: 12 },
-                            showline: true,
-                            showgrid: true,
-                        }
-                    },
-                    height: 500,
-                    margin: { t: 60, r: 60, b: 60, l: 60 },
-                    font: { size: 11 },
-                    paper_bgcolor: '#ffffff',
-                    showlegend: true,
-                    legend: { x: 0.02, y: 0.98, bgcolor: 'rgba(255,255,255,0.8)' }
-                };
-                
-                Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ...hatchTraces, ternaryTrace], ternaryLayout, { responsive: true });
+                if (updateBtn && pressureInput) {
+                    const doUpdate = () => fetchAndRenderTernary(chartId, subtitleId, pressureInput.value);
+                    updateBtn.addEventListener('click', doUpdate);
+                    pressureInput.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); doUpdate(); }
+                    });
+                }
             } catch (error) {
                 console.error(`Error rendering ternary plot ${i}:`, error);
             }
