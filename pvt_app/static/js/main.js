@@ -83,6 +83,14 @@ function initializeTableManagement() {
         return cell;
     }
 
+    function createPsatRadioCell() {
+        const cell = document.createElement('td');
+        cell.dataset.field = 'psat';
+        cell.className = 'text-center';
+        cell.innerHTML = '<input type="radio" name="dl_psat" class="form-check-input dl-psat-radio">';
+        return cell;
+    }
+
     function createDeleteCell(fieldName) {
         const cell = document.createElement('td');
         cell.className = 'text-center row-action-cell';
@@ -97,7 +105,7 @@ function initializeTableManagement() {
         const headerCells = dlTable.querySelectorAll('thead th[data-field]');
         return Array.from(headerCells)
             .map(cell => cell.dataset.field)
-            .filter(field => field && !['pressure', 'bo', 'bubble_point'].includes(field));
+            .filter(field => field && !['pressure', 'bo', 'bubble_point', 'psat', 'action'].includes(field));
     }
 
     function refreshDlPropertyChipState() {
@@ -222,6 +230,14 @@ function initializeTableManagement() {
             });
 
             newRow.appendChild(createBubbleCell('dl_table'));
+            const bubbleRadio = newRow.querySelector('.dl-bubble-radio');
+            setupBubblePointToggle(bubbleRadio, 'dl_table');
+
+            const psatCell = createPsatRadioCell();
+            newRow.appendChild(psatCell);
+            const psatRadio = psatCell.querySelector('.dl-psat-radio');
+            setupBubblePointToggle(psatRadio, 'dl_table');
+
             newRow.appendChild(createDeleteCell('action'));
         } else {
             newRow.innerHTML = `
@@ -296,9 +312,12 @@ function initializeTableManagement() {
         const headerCells = table.querySelectorAll('thead th');
         const rows = table.querySelectorAll('tbody tr');
         const data = [];
+        const isDlTable = tableId === 'dl_table';
 
         if (headerCells.length > 0) {
-            const headers = Array.from(headerCells).map((cell) => cell.textContent.trim());
+            const headers = Array.from(headerCells)
+                .filter((cell) => !cell.dataset.field || cell.dataset.field !== 'psat')
+                .map((cell) => cell.textContent.trim());
             data.push(headers.join(','));
         }
 
@@ -306,9 +325,20 @@ function initializeTableManagement() {
             const cells = row.querySelectorAll('td');
             const values = [];
             let hasData = false;
+            let psatChecked = false;
+
+            if (isDlTable) {
+                const psatRadio = row.querySelector('.dl-psat-radio');
+                psatChecked = psatRadio ? psatRadio.checked : false;
+            }
 
             cells.forEach((cell) => {
                 if (cell.classList.contains('row-action-cell')) {
+                    return;
+                }
+
+                // Skip the psat radio cell — it's encoded in the pressure value instead
+                if (isDlTable && cell.dataset.field === 'psat') {
                     return;
                 }
 
@@ -322,7 +352,13 @@ function initializeTableManagement() {
                 }
 
                 const input = cell.querySelector('input[type="number"]');
-                const value = input ? input.value.trim() : '';
+                let value = input ? input.value.trim() : '';
+
+                // Append ** to pressure value if this row's psat radio is checked
+                if (isDlTable && cell.dataset.field === 'pressure' && psatChecked && value) {
+                    value = value + ' **';
+                }
+
                 values.push(value);
 
                 if (value) {
@@ -399,9 +435,10 @@ function initializeTableManagement() {
 
     function parsePressureCell(rawPressure) {
         const text = String(rawPressure || '').trim();
-        const isBubblePoint = text.includes('*');
+        const isPsat = text.includes('**');
+        const isBubblePoint = !isPsat && text.includes('*');
         const pressure = text.replace(/\*/g, '').trim();
-        return { pressure, isBubblePoint };
+        return { pressure, isBubblePoint, isPsat };
     }
 
     function findColumnIndex(headers, aliases) {
@@ -425,7 +462,7 @@ function initializeTableManagement() {
         return Array.from(headerCells)
             .map((cell) => {
                 const field = cell.dataset.field;
-                if (!field || field === 'bubble_point' || field === 'action') {
+                if (!field || field === 'bubble_point' || field === 'psat' || field === 'action') {
                     return null;
                 }
 
@@ -523,10 +560,17 @@ function initializeTableManagement() {
             });
 
             row.appendChild(createBubbleCell('dl_table'));
+            const bubbleRadio = row.querySelector('.dl-bubble-radio');
+            setupBubblePointToggle(bubbleRadio, 'dl_table');
+            bubbleRadio.checked = pressureInfo.isBubblePoint;
+
+            const psatCell = createPsatRadioCell();
+            row.appendChild(psatCell);
+            const psatRadio = psatCell.querySelector('.dl-psat-radio');
+            setupBubblePointToggle(psatRadio, 'dl_table');
+            psatRadio.checked = pressureInfo.isPsat;
+
             row.appendChild(createDeleteCell('action'));
-            const radio = row.querySelector('input[type="radio"]');
-            setupBubblePointToggle(radio, 'dl_table');
-            radio.checked = pressureInfo.isBubblePoint;
             tbody.appendChild(row);
             inserted++;
         });
@@ -646,17 +690,19 @@ function initializeTableManagement() {
             }
 
             const dlColumnConfig = getDlColumnConfig();
-            const headerAliasMap = buildHeaderAliasMap(headers);
+            const normalizedHeaders = headers.map(normalizeHeaderName);
 
             const dlColumnMappings = dlColumnConfig
                 .map((config) => {
-                    const csvIndex = config.aliases.find((alias) => headerAliasMap.has(alias));
-                    if (!csvIndex) {
+                    const csvIndex = normalizedHeaders.findIndex((header) =>
+                        config.aliases.some((alias) => header.includes(alias))
+                    );
+                    if (csvIndex < 0) {
                         return null;
                     }
                     return {
                         field: config.field,
-                        csvIndex: headerAliasMap.get(csvIndex),
+                        csvIndex,
                     };
                 })
                 .filter(Boolean);
@@ -816,6 +862,10 @@ function initializeTableManagement() {
         setupBubblePointToggle(radio, 'dl_table');
     });
 
+    document.querySelectorAll('.dl-psat-radio').forEach(radio => {
+        setupBubblePointToggle(radio, 'dl_table');
+    });
+
     updateDetectedPressureRangeDisplay();
 
     activeDlPropertyKeys.clear();
@@ -840,6 +890,7 @@ function initializeTableManagement() {
             document.getElementById('dl_data').value = dlCSV;
             document.getElementById('composition_data').value = compositionCSV;
             document.getElementById('saturation_pressure').value = getSelectedBubblePressure();
+            document.getElementById('psat_pressure').value = getSelectedPsatPressure();
 
             form.submit();
         });
@@ -874,6 +925,9 @@ function initializeCharts() {
             ternaryPlots: rawResultData.ternary_plots || [],
             dl1PropertyPlots: rawResultData.dl1_property_plots || {},
             fingerprint: rawResultData.fingerprint ? {
+                component: rawResultData.fingerprint.component,
+                molarWeight: rawResultData.fingerprint.molar_weight,
+                molePercent: rawResultData.fingerprint.mole_percent,
                 pressure: rawResultData.fingerprint.pressure,
                 fingerprintIndex: rawResultData.fingerprint.fingerprint_index,
                 cceExperimental: rawResultData.fingerprint.cce_experimental,
@@ -1079,7 +1133,7 @@ function initializeCharts() {
             chart.render();
         } catch (error) {
             console.error(`Error rendering chart "${containerId}":`, error);
-            container.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Error rendering chart</div>`;
+            container.innerHTML = '<div style="padding: 20px; text-align: center; color: #dc3545;">Error rendering chart</div>';
         }
     };
 
@@ -1155,69 +1209,35 @@ function initializeCharts() {
         });
     }
 
-    if (resultData.fingerprint) {
-        const fingerprintBubblePressure = bubblePoint;
-        const fingerprintCceExperimental = normalizeSeriesToBubblePoint(resultData.fingerprint.pressure, resultData.fingerprint.cceExperimental, fingerprintBubblePressure);
-        const fingerprintCceSimulated = normalizeSeriesToBubblePoint(resultData.fingerprint.pressure, resultData.fingerprint.cceSimulated, fingerprintBubblePressure);
-        const fingerprintDlExperimental = normalizeSeriesToBubblePoint(resultData.fingerprint.pressure, resultData.fingerprint.dlExperimental, fingerprintBubblePressure);
-        const fingerprintDlSimulated = normalizeSeriesToBubblePoint(resultData.fingerprint.pressure, resultData.fingerprint.dlSimulated, fingerprintBubblePressure);
-        const fingerprintIndex = fingerprintCceExperimental.map((value, index) => (value + fingerprintDlExperimental[index]) / 2.0);
-
-        // Fingerprint plot using Plotly
+    if (resultData.fingerprint && resultData.fingerprint.molarWeight && resultData.fingerprint.molarWeight.length > 0) {
         const fingerprintTraces = [
             {
-                x: resultData.fingerprint.pressure,
-                y: fingerprintCceExperimental,
-                name: 'CCE Experimental (Normalized)',
+                x: resultData.fingerprint.molarWeight,
+                y: resultData.fingerprint.molePercent,
+                text: resultData.fingerprint.component || [],
+                name: 'Composition Signature',
                 type: 'scatter',
-                mode: 'lines',
+                mode: 'lines+markers+text',
+                textposition: 'top center',
                 line: { color: '#0d6efd', width: 2.2 },
-            },
-            {
-                x: resultData.fingerprint.pressure,
-                y: fingerprintCceSimulated,
-                name: 'CCE Simulated (Normalized)',
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#2f6df6', width: 2.2, dash: 'dash' },
-            },
-            {
-                x: resultData.fingerprint.pressure,
-                y: fingerprintDlExperimental,
-                name: 'DL Experimental (Normalized)',
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#198754', width: 2.2 },
-            },
-            {
-                x: resultData.fingerprint.pressure,
-                y: fingerprintDlSimulated,
-                name: 'DL Simulated (Normalized)',
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#20a968', width: 2.2, dash: 'dash' },
-            },
-            {
-                x: resultData.fingerprint.pressure,
-                y: fingerprintIndex,
-                name: 'Fingerprint Index',
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#6c757d', width: 2.2, dash: 'dot' },
+                marker: { size: 7, color: '#0d6efd' },
+                hovertemplate: 'Component: %{text}<br>MW: %{x:.3f}<br>Mole %: %{y:.6f}<extra></extra>',
             },
         ];
 
         const fingerprintLayout = {
             title: 'Fingerprint Plot',
             xaxis: {
-                title: 'Pressure (psig)',
+                title: 'Molar Weight',
             },
             yaxis: {
-                title: 'Normalized Value',
+                title: 'Mole Percent (%)',
+                type: 'log',
+                autorange: true,
             },
-            hovermode: 'x unified',
+            hovermode: 'closest',
             height: 320,
-            margin: { t: 40, r: 20, b: 60, l: 60 },
+            margin: { t: 40, r: 20, b: 60, l: 70 },
         };
 
         Plotly.newPlot('fingerprintChart', fingerprintTraces, fingerprintLayout, { responsive: true });
@@ -1409,9 +1429,9 @@ function initializeCharts() {
                 
                 const ternaryPressure = Number(ternaryData.pressure) || 0;
                 const ternaryTemperature = Number(ternaryData.temperature) || 0;
-                const aValue = (Number(ternaryData.co2_n2) || 0) * 100;
-                const bValue = (Number(ternaryData.light_hc) || 0) * 100;
-                const cValue = (Number(ternaryData.heavy_hc) || 0) * 100;
+                const aValue = (Number(ternaryData.c1) || 0) * 100;
+                const bValue = (Number(ternaryData.c2_c6) || 0) * 100;
+                const cValue = (Number(ternaryData.c7_plus) || 0) * 100;
 
                 const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
                 if (subtitleNode) {
@@ -1461,7 +1481,7 @@ function initializeCharts() {
                         symbol: 'circle',
                         line: { color: '#0856ca', width: 2 }
                     },
-                    text: [`CO₂/N₂: ${((Number(ternaryData.co2_n2) || 0) * 100).toFixed(1)}%<br>Light HC: ${((Number(ternaryData.light_hc) || 0) * 100).toFixed(1)}%<br>Heavy HC: ${((Number(ternaryData.heavy_hc) || 0) * 100).toFixed(1)}%`],
+                    text: [`C1: ${((Number(ternaryData.c1) || 0) * 100).toFixed(2)}%<br>C2-C6: ${((Number(ternaryData.c2_c6) || 0) * 100).toFixed(2)}%<br>C7+: ${((Number(ternaryData.c7_plus) || 0) * 100).toFixed(2)}%`],
                     hovertemplate: '%{text}<extra></extra>',
                     name: 'Composition'
                 };
@@ -1477,21 +1497,21 @@ function initializeCharts() {
                     ternary: {
                         sum: 100,
                         aaxis: {
-                            title: 'CO₂/N₂ (%)',
+                            title: 'C1 (%)',
                             min: minA,
                             tickfont: { size: 12 },
                             showline: true,
                             showgrid: true,
                         },
                         baxis: {
-                            title: 'Light HC: C1-C3 (%)',
+                            title: 'C2-C6 (%)',
                             min: minB,
                             tickfont: { size: 12 },
                             showline: true,
                             showgrid: true,
                         },
                         caxis: {
-                            title: 'Heavy HC: C4+ (%)',
+                            title: 'C7+ (%)',
                             min: minC,
                             tickfont: { size: 12 },
                             showline: true,
@@ -1515,67 +1535,153 @@ function initializeCharts() {
     if (resultData.dl1PropertyPlots && resultData.dl1PropertyPlots.pressure && resultData.dl1PropertyPlots.pressure.length > 0) {
         const props = resultData.dl1PropertyPlots;
         
+        // Define bubble point early so it's available for all DL charts
+        const bubblePoint = (resultData && resultData.bubble_point_pressure) ? Number(resultData.bubble_point_pressure) : null;
+        
+        const buildSortedPairs = (pressureValues, seriesValues) => pressureValues
+            .map((value, index) => ({ pressure: Number(value), value: Number(seriesValues[index]) }))
+            .filter((row) => Number.isFinite(row.pressure) && Number.isFinite(row.value))
+            .sort((left, right) => left.pressure - right.pressure);
+
+        const zCalcPairs = buildSortedPairs(props.pressure || [], props.z_factor_calculated || props.z_factor || []);
+        const zObsPairs = buildSortedPairs(props.z_factor_observed_pressure || [], props.z_factor_observed || []);
+        const densityCalcPairs = buildSortedPairs(props.liquid_density_calculated_pressure || [], props.liquid_density_calculated || []);
+        const densityObsPairs = buildSortedPairs(props.liquid_density_observed_pressure || [], props.liquid_density_observed || []);
+        const oilRelVolPairs = buildSortedPairs(props.pressure || [], props.oil_relative_volume || []);
+        const gorCalcPairs = buildSortedPairs(props.gor_calculated_pressure || [], props.gor_calculated || []);
+        const gorObsPairs = buildSortedPairs(props.gor_observed_pressure || [], props.gor_observed || []);
+        const gasFvfCalcPairs = buildSortedPairs(props.gas_fvf_calculated_pressure || [], props.gas_fvf_calculated || []);
+        const gasFvfObsPairs = buildSortedPairs(props.gas_fvf_observed_pressure || [], props.gas_fvf_observed || []);
+        const gasGravityCalcPairs = buildSortedPairs(props.gas_gravity_calculated_pressure || [], props.gas_gravity_calculated || []);
+        const gasGravityObsPairs = buildSortedPairs(props.gas_gravity_observed_pressure || [], props.gas_gravity_observed || []);
+
+        const pressurePairs = buildSortedPairs(props.pressure, props.z_factor_calculated || props.z_factor || []);
+        const orderedPressure = pressurePairs.map((row) => row.pressure);
+        
         // Figure 6: CCE Relative Volume (using existing cceChart)
         // Already rendered above
         
         // Figure 7: DL Vapor Z-Factor
         const zFactorTraces = [{
-            x: props.pressure,
-            y: props.z_factor,
-            name: 'Gas Z-Factor',
+            x: zCalcPairs.map((row) => row.pressure),
+            y: zCalcPairs.map((row) => row.value),
+            name: 'Calculated',
             type: 'scatter',
             mode: 'lines+markers',
             line: { color: '#0d6efd', width: 2 },
             marker: { size: 6 },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(13, 110, 253, 0.1)',
         }];
+
+        if (zObsPairs.length > 0) {
+            zFactorTraces.push({
+                x: zObsPairs.map((row) => row.pressure),
+                y: zObsPairs.map((row) => row.value),
+                name: 'Observed',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+
+        // Auto-scale Z-Factor y-axis to show both calculated and observed
+        const zCombinedY = [].concat(zCalcPairs.map(r => r.value), zObsPairs.map(r => r.value)).filter(Number.isFinite);
+        let zRange = undefined;
+        if (zCombinedY.length > 0) {
+            const zMin = Math.min(...zCombinedY);
+            const zMax = Math.max(...zCombinedY);
+            const zPad = Math.max((zMax - zMin) * 0.1, 0.01);
+            zRange = [Math.max(0, zMin - zPad), zMax + zPad];
+        }
         const zFactorLayout = {
             title: 'DL Vapor Z-Factor vs Pressure',
-            xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'Z-Factor' },
+            xaxis: { title: 'Pressure (psig)', range: bubblePoint ? [0, bubblePoint] : undefined },
+            yaxis: { title: 'Z-Factor', range: zRange },
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
         Plotly.newPlot('dlZFactorChart', zFactorTraces, zFactorLayout, { responsive: true });
 
-        // Figure 8: DL Liquid Density
-        const densityTraces = [{
-            x: props.pressure,
-            y: props.liquid_density,
-            name: 'Liquid Density',
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#198754', width: 2 },
-            marker: { size: 6 },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(25, 135, 84, 0.1)',
-        }];
+        // Figure 8: DL Liquid Density (separate calculated and observed series)
+        const densityTraces = [];
+        if (densityCalcPairs.length > 0) {
+            densityTraces.push({
+                x: densityCalcPairs.map((row) => row.pressure),
+                y: densityCalcPairs.map((row) => row.value),
+                name: 'Calculated',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#0d6efd', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        if (densityObsPairs.length > 0) {
+            densityTraces.push({
+                x: densityObsPairs.map((row) => row.pressure),
+                y: densityObsPairs.map((row) => row.value),
+                name: 'Observed',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        // Compute axis ranges dynamically: x-axis from 0 to bubble point if available,
+        // y-axis auto-scaled to combined min/max of both series with small padding.
+        const combinedY = [].concat(densityCalcPairs.map(r => r.value), densityObsPairs.map(r => r.value)).filter(Number.isFinite);
+        let yRange = undefined;
+        if (combinedY.length > 0) {
+            const yMin = Math.min(...combinedY);
+            const yMax = Math.max(...combinedY);
+            const pad = Math.max((yMax - yMin) * 0.1, 0.5);
+            yRange = [yMin - pad, yMax + pad];
+        }
         const densityLayout = {
             title: 'DL Liquid Density vs Pressure',
-            xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'Density (lb/ft³)' },
+            xaxis: { title: 'Pressure (psig)', range: bubblePoint ? [0, bubblePoint] : undefined },
+            yaxis: { title: 'Density (lb/ft³)', range: yRange },
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
         Plotly.newPlot('dlDensityChart', densityTraces, densityLayout, { responsive: true });
 
         // Figure 9: DL Gas-Oil Ratio
-        const gorTraces = [{
-            x: props.pressure,
-            y: props.gor,
-            name: 'GOR',
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#fd7e14', width: 2 },
-            marker: { size: 6 },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(253, 126, 20, 0.1)',
-        }];
+        const gorTraces = [];
+        if (gorCalcPairs.length > 0) {
+            gorTraces.push({
+                x: gorCalcPairs.map((row) => row.pressure),
+                y: gorCalcPairs.map((row) => row.value),
+                name: 'Calculated',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#0d6efd', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        if (gorObsPairs.length > 0) {
+            gorTraces.push({
+                x: gorObsPairs.map((row) => row.pressure),
+                y: gorObsPairs.map((row) => row.value),
+                name: 'Observed',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        // Auto-scale GOR y-axis to show both calculated and observed
+        const gorCombinedY = [].concat(gorCalcPairs.map(r => r.value), gorObsPairs.map(r => r.value)).filter(Number.isFinite);
+        let gorRange = undefined;
+        if (gorCombinedY.length > 0) {
+            const gorMin = Math.min(...gorCombinedY);
+            const gorMax = Math.max(...gorCombinedY);
+            const gorPad = Math.max((gorMax - gorMin) * 0.1, 0.05);
+            gorRange = [Math.max(0, gorMin - gorPad), gorMax + gorPad];
+        }
         const gorLayout = {
             title: 'DL Gas-Oil Ratio vs Pressure',
-            xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'GOR (Mscf/stb)', autorange: true },
+            xaxis: { title: 'Pressure (psig)', range: bubblePoint ? [0, bubblePoint] : undefined },
+            yaxis: { title: 'GOR (Mscf/stb)', range: gorRange },
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
@@ -1583,8 +1689,8 @@ function initializeCharts() {
 
         // Figure 10: DL Oil Relative Volume
         const oilRelVolTraces = [{
-            x: props.pressure,
-            y: props.oil_relative_volume,
+            x: oilRelVolPairs.map((row) => row.pressure),
+            y: oilRelVolPairs.map((row) => row.value),
             name: 'Oil Rel Vol',
             type: 'scatter',
             mode: 'lines+markers',
@@ -1603,43 +1709,82 @@ function initializeCharts() {
         Plotly.newPlot('dlOilRelVolChart', oilRelVolTraces, oilRelVolLayout, { responsive: true });
 
         // Figure 11: DL Gas FVF
-        const gasFvfTraces = [{
-            x: props.pressure,
-            y: props.gas_fvf,
-            name: 'Gas FVF',
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#6c757d', width: 2 },
-            marker: { size: 6 },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(108, 117, 125, 0.1)',
-        }];
+        const gasFvfTraces = [];
+        if (gasFvfCalcPairs.length > 0) {
+            gasFvfTraces.push({
+                x: gasFvfCalcPairs.map((row) => row.pressure),
+                y: gasFvfCalcPairs.map((row) => row.value),
+                name: 'Calculated',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#0d6efd', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        if (gasFvfObsPairs.length > 0) {
+            gasFvfTraces.push({
+                x: gasFvfObsPairs.map((row) => row.pressure),
+                y: gasFvfObsPairs.map((row) => row.value),
+                name: 'Observed',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+        // Auto-scale Gas FVF y-axis to show both calculated and observed
+        const gasFvfCombinedY = [].concat(gasFvfCalcPairs.map(r => r.value), gasFvfObsPairs.map(r => r.value)).filter(Number.isFinite);
+        let gasFvfRange = undefined;
+        if (gasFvfCombinedY.length > 0) {
+            const gasFvfMin = Math.min(...gasFvfCombinedY);
+            const gasFvfMax = Math.max(...gasFvfCombinedY);
+            const gasFvfPad = Math.max((gasFvfMax - gasFvfMin) * 0.1, 5);
+            gasFvfRange = [Math.max(0, gasFvfMin - gasFvfPad), gasFvfMax + gasFvfPad];
+        }
         const gasFvfLayout = {
             title: 'DL Gas Formation Volume Factor vs Pressure',
-            xaxis: { title: 'Pressure (psig)' },
-            yaxis: { title: 'Gas FVF (rb/Mscf)' },
+            xaxis: { title: 'Pressure (psig)', range: bubblePoint ? [0, bubblePoint] : undefined },
+            yaxis: { title: 'Gas FVF (rb/Mscf)', range: gasFvfRange },
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
         };
         Plotly.newPlot('dlGasFVFChart', gasFvfTraces, gasFvfLayout, { responsive: true });
 
         // Figure 12: DL Gas Gravity
-        const gasGravityTraces = [{
-            x: props.pressure,
-            y: props.gas_gravity,
-            name: 'Gas Gravity',
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#8b5cf6', width: 2 },
-            marker: { size: 6 },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(139, 92, 246, 0.1)',
-        }];
+        const gasGravityTraces = [];
+        if (gasGravityCalcPairs.length > 0) {
+            gasGravityTraces.push({
+                x: gasGravityCalcPairs.map((row) => row.pressure),
+                y: gasGravityCalcPairs.map((row) => row.value),
+                name: 'Calculated',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#0d6efd', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+
+        if (gasGravityObsPairs.length > 0) {
+            gasGravityTraces.push({
+                x: gasGravityObsPairs.map((row) => row.pressure),
+                y: gasGravityObsPairs.map((row) => row.value),
+                name: 'Observed',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 2 },
+                marker: { size: 6 },
+            });
+        }
+
         const gasGravityLayout = {
             title: 'DL Gas Gravity vs Pressure',
-            xaxis: { title: 'Pressure (psig)' },
+            xaxis: { title: 'Pressure (psig)', range: bubblePoint ? [0, bubblePoint] : undefined },
             yaxis: (() => {
-                const values = props.gas_gravity.filter((value) => Number.isFinite(Number(value)));
+                const combinedValues = [
+                    ...gasGravityCalcPairs.map((row) => row.value),
+                    ...gasGravityObsPairs.map((row) => row.value),
+                ];
+                const values = combinedValues.filter((value) => Number.isFinite(Number(value)));
                 const minValue = values.length ? Math.min(...values) : 0;
                 const maxValue = values.length ? Math.max(...values) : 1;
                 const span = Math.max(maxValue - minValue, 0.05);
@@ -1798,6 +1943,16 @@ function getSelectedBubblePressure() {
 
     const selectedDl = Array.from(document.querySelectorAll('.dl-bubble-radio')).find((radio) => radio.checked);
     return extractPressureFromRow(selectedDl);
+}
+
+function getSelectedPsatPressure() {
+    const selectedPsat = Array.from(document.querySelectorAll('.dl-psat-radio')).find((radio) => radio.checked);
+    if (!selectedPsat) {
+        return '';
+    }
+    const row = selectedPsat.closest('tr');
+    const pressureInput = row?.querySelector('td[data-field="pressure"] input');
+    return pressureInput ? pressureInput.value.trim() : '';
 }
 
 function showErrorModal(errors) {

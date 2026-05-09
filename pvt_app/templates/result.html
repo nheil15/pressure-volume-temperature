@@ -5,7 +5,7 @@
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -144,7 +144,7 @@
                                 <th>Pressure</th>
                                 <th>CCE Relative Volume</th>
                                 <th>DL Bo</th>
-                                <th>DL Rs (scf/stb)</th>
+                                <th>DL Rs (Mscf/stb)</th>
                                 <th>DL Gas Z</th>
                                 <th>Oil Density (lb/ft3)</th>
                                 <th>Fingerprint Index</th>
@@ -476,10 +476,12 @@
                         <thead class="position-sticky" style="top: 0; background: white; z-index: 10;">
                             <tr>
                                 <th>Pressure (psi)</th>
-                                <th>GOR (scf/stb)</th>
+                                <th>GOR Observed (Mscf/stb)</th>
+                                <th>GOR Calculated (Mscf/stb)</th>
                                 <th>Total Rel Vol</th>
                                 <th>Oil Rel Vol</th>
-                                <th>Liq Dens (lb/ft³)</th>
+                                <th>Liq Dens Observed (lb/ft³)</th>
+                                <th>Liq Dens Calculated (lb/ft³)</th>
                                 <th>Vap Dens (lb/ft³)</th>
                                 <th>Gas Gravity</th>
                                 <th>Z Liq</th>
@@ -496,11 +498,13 @@
                         <tbody>
                             {% for row in results.dl1_table %}
                             <tr>
-                                <td>{{ row.pressure }}</td>
-                                <td>{{ row.gor }}</td>
+                                <td>{{ row.pressure_label or row.pressure }}</td>
+                                <td>{{ row.gor_observed }}</td>
+                                <td>{{ row.gor_calculated }}</td>
                                 <td>{{ row.total_relative_volume }}</td>
                                 <td>{{ row.oil_relative_volume }}</td>
-                                <td>{{ row.liquid_density }}</td>
+                                <td>{{ row.liquid_density_observed }}</td>
+                                <td>{{ row.liquid_density_calculated or row.liquid_density }}</td>
                                 <td>{{ row.vapor_density }}</td>
                                 <td>{{ row.gas_gravity }}</td>
                                 <td>{{ row.z_liquid }}</td>
@@ -533,6 +537,7 @@
                     <table class="table table-sm align-middle mb-0">
                         <thead>
                             <tr>
+                                <th>Condition</th>
                                 <th>Bubble Point Pressure (psi)</th>
                                 <th>Z Liquid</th>
                                 <th>Z Vapor</th>
@@ -546,18 +551,21 @@
                             </tr>
                         </thead>
                         <tbody>
+                            {% for row in results.psat1_table %}
                             <tr>
-                                <td>{{ results.psat1_table.bubble_point_pressure }}</td>
-                                <td>{{ results.psat1_table.z_liquid }}</td>
-                                <td>{{ results.psat1_table.z_vapor }}</td>
-                                <td>{{ results.psat1_table.oil_viscosity }}</td>
-                                <td>{{ results.psat1_table.gas_viscosity }}</td>
-                                <td>{{ results.psat1_table.liquid_density }}</td>
-                                <td>{{ results.psat1_table.vapor_density }}</td>
-                                <td>{{ results.psat1_table.molar_volume_liquid }}</td>
-                                <td>{{ results.psat1_table.molar_volume_vapor }}</td>
-                                {% for k in results.psat1_table.k_values %}<td>{{ k }}</td>{% endfor %}
+                                <td>{{ row.condition }}</td>
+                                <td>{{ row.bubble_point_pressure }}</td>
+                                <td>{{ row.z_liquid }}</td>
+                                <td>{{ row.z_vapor }}</td>
+                                <td>{{ row.oil_viscosity }}</td>
+                                <td>{{ row.gas_viscosity }}</td>
+                                <td>{{ row.liquid_density }}</td>
+                                <td>{{ row.vapor_density }}</td>
+                                <td>{{ row.molar_volume_liquid }}</td>
+                                <td>{{ row.molar_volume_vapor }}</td>
+                                {% for k in row.k_values %}<td>{{ k }}</td>{% endfor %}
                             </tr>
+                            {% endfor %}
                         </tbody>
                     </table>
                 </div>

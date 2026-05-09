@@ -54,6 +54,7 @@
                 
                 <form action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" class="vstack gap-4" id="pvt_form">
                     <input type="hidden" id="saturation_pressure" name="saturation_pressure">
+                    <input type="hidden" id="psat_pressure" name="psat_pressure">
                     <div class="row g-3">
                         <div class="col-md-5">
                             <label for="reservoir_temperature" class="form-label">Reservoir Temperature (°F)</label>
@@ -168,6 +169,7 @@
                                             <th data-field="pressure" style="width: 40%;">Pressure (PSIG)</th>
                                             <th data-field="bo" style="width: 40%;">Oil Volume Factor (Bo)</th>
                                             <th data-field="bubble_point" style="width: 20%;">Bubble Point</th>
+                                            <th data-field="psat" style="width: 20%;">Psat **</th>
                                             <th data-field="action" style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
@@ -176,6 +178,7 @@
                                             <td data-field="pressure"><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
                                             <td data-field="bo"><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Bo"></td>
                                             <td data-field="bubble_point" class="text-center"><input type="radio" name="dl_bubble" class="form-check-input dl-bubble-radio"></td>
+                                            <td data-field="psat" class="text-center"><input type="radio" name="dl_psat" class="form-check-input dl-psat-radio"></td>
                                             <td data-field="action" class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>

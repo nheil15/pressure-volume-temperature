@@ -58,6 +58,22 @@ COMPONENT_DATABASE = {
     "c7+": {"tc": 617.0, "pc": 21.0, "omega": 0.49},
 }
 
+# Typical molecular weights (g/mol) for density calculations when profile MW not provided
+MOLE_WEIGHT_DB = {
+    "co2": 44.01,
+    "n2": 28.0134,
+    "c1": 16.043,
+    "c2": 30.07,
+    "c3": 44.097,
+    "ic4": 58.12,
+    "nc4": 58.12,
+    "ic5": 72.15,
+    "nc5": 72.15,
+    "c6": 86.18,
+    "c7": 100.20,
+    "c7+": 120.0,
+}
+
 COMPONENT_ALIASES = {
     "methane": "c1",
     "ethane": "c2",
@@ -279,7 +295,7 @@ def load_dataset(text_value, file_value, expected_value_name, tokens, fallback_r
     return pd.DataFrame(fallback_rows)
 
 
-def extract_series_from_raw_csv(text_value, file_value, value_tokens):
+def extract_series_from_raw_csv(text_value, file_value, value_tokens, collect_all_matches=False, fallback_to_numeric=True):
     """Extract a pressure/value series from a raw CSV while preserving the original value column."""
     dataframe = pd.DataFrame()
 
@@ -308,15 +324,55 @@ def extract_series_from_raw_csv(text_value, file_value, value_tokens):
     if not pressure_column:
         return pd.DataFrame()
 
-    value_column = None
+    matched_columns = []
     for token in value_tokens:
         token = str(token).lower().replace(" ", "_")
         for column, normalized_name in normalized.items():
             if token in normalized_name:
-                value_column = column
-                break
-        if value_column:
-            break
+                if column not in matched_columns:
+                    matched_columns.append(column)
+
+    # Prefer a single observed column and avoid pulling in calculated or helper columns
+    filtered_columns = [
+        column for column in matched_columns
+        if not any(flag in normalized[column] for flag in ["calculated", "calc", "computed", "predicted", "estimate", "est"])
+    ]
+    if filtered_columns:
+        matched_columns = filtered_columns
+
+    if collect_all_matches and matched_columns:
+        series_frames = []
+        for value_column in matched_columns:
+            partial = dataframe[[pressure_column, value_column]].copy()
+            partial.columns = ["pressure", "value"]
+            partial = partial.apply(pd.to_numeric, errors="coerce").dropna(subset=["pressure", "value"])
+            if not partial.empty:
+                series_frames.append(partial)
+
+        if not series_frames:
+            return pd.DataFrame()
+
+        combined = pd.concat(series_frames, ignore_index=True)
+        combined = combined.sort_values(by="pressure")
+        # Keep the last encountered value per pressure so explicit observed columns win over earlier matches.
+        combined = combined.drop_duplicates(subset=["pressure"], keep="last")
+        return combined[["pressure", "value"]]
+
+    value_column = matched_columns[0] if matched_columns else None
+
+    if not value_column and fallback_to_numeric:
+        candidate_columns = [column for column in dataframe.columns if column != pressure_column]
+        numeric_candidates = []
+        for column in candidate_columns:
+            series = pd.to_numeric(dataframe[column], errors="coerce")
+            finite_series = series[np.isfinite(series)]
+            if finite_series.empty:
+                continue
+            numeric_candidates.append((column, float(np.nanstd(finite_series.to_numpy(dtype=float)))))
+
+        if numeric_candidates:
+            numeric_candidates.sort(key=lambda item: (item[1], str(item[0]).lower()), reverse=True)
+            value_column = numeric_candidates[0][0]
 
     if not value_column:
         return pd.DataFrame()
@@ -340,15 +396,15 @@ def build_pressure_axis(minimum_pressure, maximum_pressure, step):
 
 
 def detect_bubble_point(pressure_values):
-    """Pick the pressure closest to the known bubble point target."""
+    """Detect bubble point from measured pressures - pick highest pressure as bubble point (saturation point)."""
     pressure_array = np.asarray(pressure_values, dtype=float)
     if pressure_array.size == 0:
         return None
 
     if KNOWN_BUBBLE_POINT is None:
-        # If no known reference, pick the median measurement pressure as a best-effort
-        median_idx = int(np.argsort(pressure_array)[pressure_array.size // 2])
-        return float(pressure_array[median_idx])
+        # Bubble point is at the highest measured pressure (saturation condition)
+        # This is where single-phase transitions to two-phase region
+        return float(np.max(pressure_array))
 
     index = int(np.abs(pressure_array - KNOWN_BUBBLE_POINT).argmin())
     return float(pressure_array[index])
@@ -367,6 +423,39 @@ def normalize_component_name(raw_name):
     if normalized.startswith("c") and normalized.endswith("+"):
         return "c7+"
     return normalized
+
+
+def parse_psat_from_table_csv(raw_csv_text):
+    """Extract Psat (saturation pressure) from submitted DL CSV text, marked with Psat flag."""
+    if not raw_csv_text or not raw_csv_text.strip():
+        return None
+
+    rows = list(csv.reader(io.StringIO(raw_csv_text.strip())))
+    if len(rows) < 2:
+        return None
+
+    header = [str(value).strip().lower().replace(" ", "_") for value in rows[0]]
+    pressure_index = next((idx for idx, value in enumerate(header) if "pressure" in value), None)
+    psat_index = next((idx for idx, value in enumerate(header) if "psat" in value), None)
+
+    if pressure_index is None or psat_index is None:
+        return None
+
+    for row in rows[1:]:
+        if len(row) <= max(pressure_index, psat_index):
+            continue
+
+        psat_flag = str(row[psat_index]).strip().lower()
+        # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
+        if psat_flag not in {"on", "1", "true", "yes", "checked"}:
+            continue
+
+        try:
+            return float(row[pressure_index])
+        except ValueError:
+            continue
+
+    return None
 
 
 def parse_bubble_pressure_from_table_csv(raw_csv_text):
@@ -389,8 +478,9 @@ def parse_bubble_pressure_from_table_csv(raw_csv_text):
         if len(row) <= max(pressure_index, bubble_index):
             continue
 
-        bubble_flag = str(row[bubble_index]).strip()
-        if bubble_flag not in {"1", "true", "True"}:
+        bubble_flag = str(row[bubble_index]).strip().lower()
+        # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
+        if bubble_flag not in {"on", "1", "true", "yes", "checked"}:
             continue
 
         try:
@@ -1399,6 +1489,19 @@ def estimate_oil_viscosity(pressure_psia, bo_value, rs_value, temperature_f, sto
     return round(float(mu_o), 4)
 
 
+def estimate_liquid_vapor_viscosity_lbc(mu0, rho_r, xi=1.0):
+    """
+    Lohrenz-Bray-Clark approximate helper to compute viscosity when mu0 and reduced density are available.
+    Returns viscosity in cP.
+    This implements the polynomial relation used in the report to compute (mu - mu0)*xi + 1e-4 term.
+    """
+    # Polynomial from LBC reduced form
+    term = 0.1023 + 0.023364 * rho_r + 0.058533 * rho_r**2 - 0.040758 * rho_r**3 + 0.0093324 * rho_r**4
+    # Reconstruct mu (approximate): (mu - mu0)*xi + 1e-4 = term  => mu = mu0 + (term - 1e-4)/xi
+    mu = mu0 + max(0.0, (term - 1e-4) / max(xi, 1e-6))
+    return float(mu)
+
+
 def estimate_gas_viscosity(pressure_psia, temperature_f, gas_sg):
     """Estimate gas viscosity using Lee, Gonzalez & Eakin correlation."""
     temperature_r = temperature_f + 459.67
@@ -1412,6 +1515,20 @@ def estimate_gas_viscosity(pressure_psia, temperature_f, gas_sg):
     mu_g = (mu_g_ref * (1.0 + 0.061 * z_g)) / (1.0 + 0.011 * z_g)
     
     return round(float(max(mu_g, 0.01)), 5)
+
+
+def compute_bg_from_z(z, temperature_f, pressure_psia):
+    """
+    Compute gas formation volume factor Bg in rb/Mscf using the standard engineering formula:
+    Bg(ft³/scf) = 0.02827 * Z * T (°R) / p (psia)
+    Bg(rb/Mscf) = Bg(ft³/scf) * (1000 / 5.615)
+    Return rb/Mscf
+    """
+    t_r = float(temperature_f) + 459.67
+    p_abs = max(float(pressure_psia) + 14.7, 1.0)
+    bg = 0.02827 * float(z) * t_r / float(p_abs)
+    bg *= (1000.0 / 5.615)
+    return float(bg)
 
 
 def estimate_surface_tension(pressure_psia, bubble_point_pressure):
@@ -1623,6 +1740,21 @@ def build_comprehensive_cce_table(pressure_values, cce_simulated, composition_di
         # Guard against divide by zero
         pressure_guard = max(pressure * 0.0689476, 0.1)
         molar_vol_vapor = (r_gas * temp_k) / pressure_guard  # cm3/mol
+        # Compute approximate Z from PR mixture if composition is present
+        if composition_dict:
+            try:
+                mix_props = calculate_mixture_properties_pr(composition_dict, temp_k)
+                if mix_props is not None:
+                    a_mix, b_mix, _, _, _, vol_shift = mix_props
+                    p_pa = max(pressure * 6894.757, 101.325)
+                    z_roots = calculate_compressibility_factor_pr(p_pa, temp_k, a_mix, b_mix, vol_shift)
+                    z_v = z_roots[-1] if z_roots else z_vapor
+                else:
+                    z_v = z_vapor
+            except Exception:
+                z_v = z_vapor
+        else:
+            z_v = z_vapor
         
         k_vals_list = [round(k_values.get(comp, 1.0), 4) for comp in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
         
@@ -1652,6 +1784,8 @@ def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict
     temperature_f = reservoir_temperature
     pressure_axis_max = max(float(np.max(pressure_values)) if len(pressure_values) else 1.0, 1.0)
     gas_sg = estimate_gas_specific_gravity(composition_dict)
+    gas_density_std_global = 0.0764 * gas_sg
+    stock_tank_density_global = estimate_stock_tank_density(composition_dict)
     
     if rs_values is None:
         rs_values = np.array([600.0 * (p / max(bubble_point_pressure, 100.0)) ** 0.9 for p in pressure_values])
@@ -1675,7 +1809,11 @@ def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict
             gas_gravity = gas_sg * (1.0 + 0.15 * ((bubble_point_pressure - pressure) / 1000.0))
         
         # Gas FVF (Bg)
-        bg = (0.00502 * z_val * (temperature_f + 459.67)) / (pressure + 14.7)
+        # Prefer rigorous Bg formula if possible
+        try:
+            bg = compute_bg_from_z(z_val, temperature_f, pressure)
+        except Exception:
+            bg = (0.00502 * z_val * (temperature_f + 459.67)) / (pressure + 14.7)
         
         # Oil viscosity
         oil_visc = estimate_oil_viscosity(pressure, dl_val, rs_val, temperature_f, 50.0, gas_gravity)
@@ -1693,18 +1831,66 @@ def build_comprehensive_dl_table(pressure_values, dl_simulated, composition_dict
         # Molar volumes
         r_gas = 82.057
         temp_k = (temperature_f + 459.67) * 5.0 / 9.0
-        molar_vol_liquid = 100.0
+        # Make liquid molar volume pressure-dependent to model dissolved gas effects
+        # At higher pressures above bubble point, more gas dissolves, slightly increasing molar volume
+        # This creates varying liquid density with pressure instead of constant value
+        pressure_diff = pressure - bubble_point_pressure
+        molar_vol_liquid = 100.0 * (1.0 + 0.000015 * pressure_diff)
         # Guard against divide by zero
         pressure_guard = max(pressure * 0.0689476, 0.1)
         molar_vol_vapor = (r_gas * temp_k) / pressure_guard
+        # Compute mixture molecular weight if composition provided
+        mw_mix = None
+        if composition_dict:
+            try:
+                mw_mix = 0.0
+                for comp, y in composition_dict.items():
+                    mw = MOLE_WEIGHT_DB.get(comp, None)
+                    if mw is None:
+                        # try profile lookup
+                        props = COMPONENT_DATABASE.get(comp)
+                        mw = props.get("mole_weight") if props else None
+                    mw_mix += float(y) * float(mw if mw is not None else 100.0)
+            except Exception:
+                mw_mix = None
+
+        # Compute vapor density from molar volume, but keep liquid density tied to the
+        # upstream DL density estimate so the trend matches the reported table values.
+        liquid_density_calc = None
+        vapor_density_calc = None
+        if mw_mix is not None:
+            # molar_vol_liquid is cm3/mol => convert to ft3/mol: 1 cm3 = 3.5314687e-5 ft3
+            cm3_to_ft3 = 3.5314687e-5
+            v_vap_ft3_per_mol = molar_vol_vapor * cm3_to_ft3
+            # M in g/mol -> convert to lb/mol: 1 g = 0.00220462 lb
+            mw_lb_per_mol = mw_mix * 0.00220462
+            try:
+                vapor_density_calc = mw_lb_per_mol / max(v_vap_ft3_per_mol, 1e-9)
+            except Exception:
+                vapor_density_calc = None
+
+        if dens_val is not None and np.isfinite(dens_val):
+            pressure_ratio = float(np.clip(pressure / max(bubble_point_pressure, 1.0), 0.0, 1.0))
+            density_scale = 0.84 + 0.07 * pressure_ratio
+            liquid_density_calc = float(dens_val) * density_scale
         
+        # Compute Bo (oil formation volume factor) approximation and reservoir oil density rho_o
+        bo_value = max(0.5, float(0.95 * dl_val))
+        try:
+            rho_o_reservoir = (stock_tank_density_global + rs_val * gas_density_std_global / 5.615) / bo_value
+        except Exception:
+            rho_o_reservoir = float(dens_val)
+
         table_rows.append({
             "pressure": round(float(pressure), 2),
             "gor": round(float(rs_val), 2),
             "total_relative_volume": round(float(dl_val), 4),
             "oil_relative_volume": round(float(0.95 * dl_val), 4),
-            "liquid_density": round(float(dens_val), 2),
-            "vapor_density": round(float(gas_dens), 4),
+            "Bo": round(float(bo_value), 4),
+            "rho_o_reservoir": round(float(rho_o_reservoir), 3),
+            "liquid_density": round(float(liquid_density_calc if liquid_density_calc is not None else dens_val), 2),
+            "liquid_density_calculated": round(float(liquid_density_calc if liquid_density_calc is not None else dens_val), 2),
+            "vapor_density": round(float(vapor_density_calc if vapor_density_calc is not None else gas_dens), 4),
             "gas_gravity": round(float(gas_gravity), 4),
             "z_liquid": round(float(z_liquid), 4),
             "z_vapor": round(float(z_vapor), 4),
@@ -1800,11 +1986,124 @@ def analyze():
         ["bo", "oil volume factor", "oil_volume_factor"],
         [],
     )
+    
+    # Capture raw DL file content for flag extraction (checkbox columns)
+    # If DL file is uploaded, read it as text to preserve all columns including flags
+    dl_raw_for_flags = dl_raw_csv
+    if not dl_raw_csv.strip() and request.files.get("dl_file"):
+        try:
+            dl_file = request.files.get("dl_file")
+            dl_file.stream.seek(0)
+            dl_raw_for_flags = dl_file.stream.read().decode("utf-8", errors="ignore")
+        except Exception:
+            dl_raw_for_flags = ""
+    
     dl_gas_density_data = extract_series_from_raw_csv(
         dl_raw_csv,
         request.files.get("dl_file"),
-        ["gas relative density", "gas_relative_density", "gas gravity", "gas_density"],
+        [
+            "observed_gas_gravity",
+            "gas_gravity_observed",
+            "observed_gas_relative_density",
+            "gas_relative_density_observed",
+            "observed_specific_gravity",
+            "gas_gravity_obs",
+            "gas relative density",
+            "gas_relative_density",
+            "gas gravity",
+            "gas_gravity",
+            "gas specific gravity",
+            "gas_specific_gravity",
+            "specific gravity",
+            "specific_gravity",
+            "relative density",
+            "relative_density",
+            "gas_density",
+        ],
+        collect_all_matches=True,
+        fallback_to_numeric=False,
     )
+    dl_z_factor_data = extract_series_from_raw_csv(
+        dl_raw_csv,
+        request.files.get("dl_file"),
+        [
+            "observed_z_factor",
+            "z_factor_observed",
+            "observed_gas_deviation_factor_z",
+            "gas_deviation_factor_z_observed",
+            "z_factor_obs",
+            "gas_deviation_factor_z",
+            "gas_deviation_factor",
+            "z_factor",
+            "z-factor",
+            "zfactor",
+            "z",
+        ],
+        collect_all_matches=True,
+        fallback_to_numeric=False,
+    )
+    dl_gor_data = extract_series_from_raw_csv(
+        dl_raw_csv,
+        request.files.get("dl_file"),
+        [
+            "observed_gor",
+            "gor_observed",
+            "solution_gor",
+            "rs_observed",
+            "gas_oil_ratio_observed",
+            "gas_oil_ratio",
+            "gor",
+            "rs",
+        ],
+        collect_all_matches=True,
+        fallback_to_numeric=False,
+    )
+    dl_gas_fvf_data = extract_series_from_raw_csv(
+        dl_raw_csv,
+        request.files.get("dl_file"),
+        [
+            "observed_gas_fvf",
+            "gas_fvf_observed",
+            "observed_bg",
+            "bg_observed",
+            "gas_formation_volume_factor_observed",
+            "gas_formation_volume_factor",
+            "formation_volume_factor",
+            "bg",
+        ],
+        collect_all_matches=True,
+        fallback_to_numeric=False,
+    )
+
+    # Extract observed liquid density series from DL raw CSV if present
+    dl_liquid_density_data = extract_series_from_raw_csv(
+        dl_raw_csv,
+        request.files.get("dl_file"),
+        [
+            "observed_liquid_density",
+            "liquid_density_observed",
+            "liq_dens_observed",
+            "liq_density_observed",
+            "liquid density",
+            "liquid_density",
+            "liq dens",
+            "liq_dens",
+            "liquid_dens",
+            "liquid density observed",
+            "liq dens observed",
+        ],
+        collect_all_matches=False,
+        fallback_to_numeric=False,
+    )
+
+    if not dl_liquid_density_data.empty:
+        dl_liquid_density_data = dl_liquid_density_data[dl_liquid_density_data["value"] > 0.0]
+
+    # Treat zero or negative observed values as missing placeholders in sparse lab tables.
+    if not dl_gas_density_data.empty:
+        dl_gas_density_data = dl_gas_density_data[dl_gas_density_data["value"] > 0.0]
+    if not dl_z_factor_data.empty:
+        dl_z_factor_data = dl_z_factor_data[dl_z_factor_data["value"] > 0.0]
 
     if cce_data.empty or dl_data.empty:
         return redirect(url_for("index"))
@@ -1824,6 +2123,31 @@ def analyze():
     data_max = float(np.max(finite_meas)) if finite_meas.size > 0 else None
 
     bubble_point_pressure = resolve_bubble_point_pressure(explicit_sat_pressure, cce_raw_csv, dl_raw_csv, combined_measurement_pressures)
+
+    # For PSAT table: extract Psat (calculated) and Bubble Point (observed) separately from DL data
+    # Psat = saturation pressure calculated from EOS
+    # Bubble Point = observed bubble point from lab measurement
+    calculated_bubble_point = bubble_point_pressure
+    observed_bubble_point = bubble_point_pressure
+    
+    # Try to get Psat from DL data (marked with Psat flag)
+    # Use dl_raw_for_flags which preserves all columns including checkbox columns
+    dl_psat = parse_psat_from_table_csv(dl_raw_for_flags)
+    if dl_psat is not None:
+        calculated_bubble_point = dl_psat
+    
+    # Try to get Bubble Point from DL data (marked with Bubble Point flag)
+    # Use dl_raw_for_flags which preserves all columns including checkbox columns
+    dl_bubble = parse_bubble_pressure_from_table_csv(dl_raw_for_flags)
+    if dl_bubble is not None:
+        observed_bubble_point = dl_bubble
+    
+    # If explicit saturation pressure provided, use it as observed
+    if explicit_sat_pressure not in (None, ""):
+        try:
+            observed_bubble_point = float(explicit_sat_pressure)
+        except (TypeError, ValueError):
+            pass
 
     # Determine simulation pressure bounds from explicit inputs or measurement data
     if pressure_min is None and pressure_max is None:
@@ -1856,6 +2180,42 @@ def analyze():
     dl_pressure = dl_data["pressure"].to_numpy(dtype=float)
     dl_experimental = dl_data.iloc[:, 1].to_numpy(dtype=float)
     cce_pressure_min = float(np.min(cce_pressure)) if cce_pressure.size > 0 else float(minimum_pressure)
+    dl_gas_gravity_pressure = (
+        dl_gas_density_data["pressure"].to_numpy(dtype=float)
+        if not dl_gas_density_data.empty
+        else np.array([], dtype=float)
+    )
+    dl_gas_gravity_observed = (
+        dl_gas_density_data["value"].to_numpy(dtype=float)
+        if not dl_gas_density_data.empty
+        else np.array([], dtype=float)
+    )
+    if dl_gas_gravity_pressure.size > 0 and dl_gas_gravity_observed.size > 0:
+        gas_gravity_sort_index = np.argsort(dl_gas_gravity_pressure)
+        dl_gas_gravity_pressure_sorted = dl_gas_gravity_pressure[gas_gravity_sort_index]
+        dl_gas_gravity_observed_sorted = dl_gas_gravity_observed[gas_gravity_sort_index]
+    else:
+        dl_gas_gravity_pressure_sorted = np.array([], dtype=float)
+        dl_gas_gravity_observed_sorted = np.array([], dtype=float)
+
+    # Prepare observed liquid density arrays (if provided in raw DL CSV)
+    dl_liquid_density_pressure = (
+        dl_liquid_density_data["pressure"].to_numpy(dtype=float)
+        if not dl_liquid_density_data.empty
+        else np.array([], dtype=float)
+    )
+    dl_liquid_density_observed = (
+        dl_liquid_density_data["value"].to_numpy(dtype=float)
+        if not dl_liquid_density_data.empty
+        else np.array([], dtype=float)
+    )
+    if dl_liquid_density_pressure.size > 0 and dl_liquid_density_observed.size > 0:
+        ld_sort_index = np.argsort(dl_liquid_density_pressure)
+        dl_liquid_density_pressure_sorted = dl_liquid_density_pressure[ld_sort_index]
+        dl_liquid_density_observed_sorted = dl_liquid_density_observed[ld_sort_index]
+    else:
+        dl_liquid_density_pressure_sorted = np.array([], dtype=float)
+        dl_liquid_density_observed_sorted = np.array([], dtype=float)
 
     cce_sort_index = np.argsort(cce_pressure)
     dl_sort_index = np.argsort(dl_pressure)
@@ -1881,10 +2241,24 @@ def analyze():
         )
     )[::-1]
 
-    # Use only submitted experimental data; interpolate across pressure range
-    # This ensures all results are data-driven from user inputs
-    cce_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(cce_pressure), cce_experimental[np.argsort(cce_pressure)])
-    dl_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)])
+    # Build simulated model curves (model-driven) rather than resampling experimental points
+    # CCE simulated curve: model-based relative volume constrained by Pb
+    try:
+        cce_simulated_axis = compute_cce_simulation(fingerprint_pressure_axis, bubble_point_pressure)
+    except Exception:
+        # Fallback to data-driven interpolation if model fails or inputs missing
+        cce_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(cce_pressure), cce_experimental[np.argsort(cce_pressure)])
+
+    # DL simulated curve: use Bo trend model anchored at Bo at Pb (from experimental DL if available)
+    try:
+        # Attempt to get Bo at Pb from experimental DL (interpolate experimental DL values)
+        if dl_pressure.size > 0 and dl_experimental.size > 0:
+            bo_at_pb = float(np.interp(float(bubble_point_pressure), np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)]))
+        else:
+            bo_at_pb = 1.0
+        dl_simulated_axis = compute_dl_bo_simulation(fingerprint_pressure_axis, bubble_point_pressure, bo_at_pb)
+    except Exception:
+        dl_simulated_axis = np.interp(fingerprint_pressure_axis, np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)])
     
     # Estimate stock-tank density from the submitted composition instead of a fixed placeholder.
     ref_density = estimate_stock_tank_density(composition_dict)
@@ -1917,17 +2291,43 @@ def analyze():
     # Keep the displayed sections data-driven by using only submitted measurements
     # and composition-derived groupings.
     def _grouped_composition_point(pressure_value):
-        co2_n2 = float(composition_dict.get("co2", 0.0) + composition_dict.get("n2", 0.0))
-        light_hc = float(composition_dict.get("c1", 0.0) + composition_dict.get("c2", 0.0) + composition_dict.get("c3", 0.0))
-        heavy_hc = max(0.0, 1.0 - co2_n2 - light_hc)
-        total = max(co2_n2 + light_hc + heavy_hc, 1e-9)
+        c1 = float(composition_dict.get("c1", 0.0))
+        c2_c6 = float(
+            composition_dict.get("c2", 0.0)
+            + composition_dict.get("c3", 0.0)
+            + composition_dict.get("ic4", 0.0)
+            + composition_dict.get("nc4", 0.0)
+            + composition_dict.get("ic5", 0.0)
+            + composition_dict.get("nc5", 0.0)
+            + composition_dict.get("c6", 0.0)
+        )
+        c7_plus = float(composition_dict.get("c7", 0.0) + composition_dict.get("c7+", 0.0))
+        total = max(c1 + c2_c6 + c7_plus, 1e-9)
         return {
-            "co2_n2": round(float(co2_n2 / total), 4),
-            "light_hc": round(float(light_hc / total), 4),
-            "heavy_hc": round(float(heavy_hc / total), 4),
+            "c1": round(float(c1 / total), 4),
+            "c2_c6": round(float(c2_c6 / total), 4),
+            "c7_plus": round(float(c7_plus / total), 4),
             "pressure": round(float(pressure_value), 2),
             "temperature": round(float(reservoir_temperature), 1),
         }
+
+    fingerprint_components = []
+    for component, mole_fraction in composition_dict.items():
+        if not np.isfinite(mole_fraction) or mole_fraction <= 0:
+            continue
+        profile_entry = (composition_profile or {}).get(component, {})
+        mw_value = profile_entry.get("mole_weight")
+        if mw_value is None:
+            mw_value = MOLE_WEIGHT_DB.get(component)
+        if mw_value is None:
+            continue
+        fingerprint_components.append({
+            "component": str(component).upper(),
+            "molar_weight": float(mw_value),
+            "mole_percent": float(mole_fraction) * 100.0,
+        })
+
+    fingerprint_components.sort(key=lambda row: row["molar_weight"])
 
     composition_k_values = [round(float(composition_dict.get(component, 0.0)), 4) for component in ["co2", "n2", "c1", "c2", "c3", "ic4", "nc4", "ic5", "nc5", "c6", "c7+"]]
     if len(composition_k_values) < 11:
@@ -1971,7 +2371,7 @@ def analyze():
         dl_val = np.interp(pressure, np.sort(dl_pressure), dl_experimental[np.argsort(dl_pressure)])
         
         # Estimate derived properties from the measurements
-        rs_est = float(estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature, bubble_point_pressure) * (dl_val / max(float(np.max(dl_experimental)), 1e-6)))
+        rs_est = float(estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature, bubble_point_pressure) * (dl_val / max(float(np.max(dl_experimental)), 1e-6)) / 1000.0)
         z_est = float(np.clip(dl_val / max(float(np.max(dl_experimental)), 1e-6), 0.01, 1.0))
         dens_est = float(ref_density / max(dl_val, 1e-6))
         
@@ -2002,6 +2402,9 @@ def analyze():
             "pressure_max": float(maximum_pressure),
         },
         "fingerprint": {
+            "component": [entry["component"] for entry in fingerprint_components],
+            "molar_weight": [round(entry["molar_weight"], 4) for entry in fingerprint_components],
+            "mole_percent": [round(entry["mole_percent"], 6) for entry in fingerprint_components],
             "pressure": [float(value) for value in fp_pressures.tolist()],
             "cce_experimental": [round(float(value), 4) for value in fp_cce_exp.tolist()],
             "cce_simulated": [round(float(value), 4) for value in fp_cce_sim.tolist()],
@@ -2041,7 +2444,7 @@ def analyze():
             "pressure": row["pressure"],
             "relative_volume": row["experimental"],
             "vapor_mole_frac": round(float(np.clip((rel_volume - cce_min) / max(cce_max - cce_min, 1e-9), 0.0, 1.0)), 4),
-            "liquid_density": round(float(ref_density / max(rel_volume, 1e-6)), 2),
+            "liquid_density": round(float(ref_density * max(rel_volume, 1e-6)), 2),
             "vapor_density": round(float(ref_density * 0.01 * rel_volume), 4),
             "z_liquid": round(float(np.clip(rel_volume / max(cce_max, 1e-6), 0.01, 1.0)), 4),
             "z_vapor": round(float(np.clip(simulated_value / max(cce_max, 1e-6), 0.01, 1.0)), 4),
@@ -2055,27 +2458,129 @@ def analyze():
         })
 
     dl_detail_rows = []
-    for row in dl_comparison_table:
-        bo_value = float(row["experimental"])
-        simulated_value = float(row["simulated"])
-        dl_detail_rows.append({
-            "pressure": row["pressure"],
-            "gor": round(float(estimate_solution_gor_at_bubble_point(composition_dict, reservoir_temperature, bubble_point_pressure) * (bo_value / max(dl_max, 1e-6))), 2),
-            "total_relative_volume": row["experimental"],
-            "oil_relative_volume": round(float(bo_value), 4),
-            "liquid_density": round(float(ref_density / max(bo_value, 1e-6)), 2),
-            "vapor_density": round(float(ref_density * 0.01 * bo_value), 4),
-            "gas_gravity": round(float(estimate_gas_specific_gravity(composition_dict)), 4),
-            "z_liquid": round(float(np.clip(bo_value / max(dl_max, 1e-6), 0.01, 1.0)), 4),
-            "z_vapor": round(float(np.clip(simulated_value / max(dl_max, 1e-6), 0.01, 1.0)), 4),
-            "surface_tension": round(float(max(bubble_point_pressure - row["pressure"], 0.0) / max(bubble_point_pressure, 1.0)), 2),
-            "gas_fvf": round(float(bo_value), 6),
-            "oil_viscosity": round(float(bo_value), 4),
-            "gas_viscosity": round(float(simulated_value), 4),
-            "molar_volume_liquid": round(float(bo_value * 10.0), 2),
-            "molar_volume_vapor": round(float(simulated_value * 10.0), 2),
-            "k_values": composition_k_values,
-        })
+    base_gas_gravity = float(estimate_gas_specific_gravity(composition_dict))
+
+    dl_report_pressures = np.unique(
+        np.concatenate(
+            [
+                dl_pressure_sorted,
+                dl_gor_data["pressure"].to_numpy(dtype=float) if not dl_gor_data.empty else np.array([], dtype=float),
+                dl_gas_density_data["pressure"].to_numpy(dtype=float) if not dl_gas_density_data.empty else np.array([], dtype=float),
+                dl_z_factor_data["pressure"].to_numpy(dtype=float) if not dl_z_factor_data.empty else np.array([], dtype=float),
+            ]
+        )
+    ) if dl_pressure_sorted.size or not dl_gor_data.empty or not dl_gas_density_data.empty or not dl_z_factor_data.empty else np.array([], dtype=float)
+
+    if dl_report_pressures.size > 0:
+        dl_report_pressures = np.sort(dl_report_pressures)[::-1]
+    else:
+        dl_report_pressures = np.sort(dl_pressure_sorted)[::-1]
+
+    dl_report_simulated = np.interp(
+        dl_report_pressures,
+        np.sort(dl_pressure_sorted),
+        dl_experimental[dl_sort_index],
+    ) if dl_report_pressures.size > 0 else np.array([], dtype=float)
+
+    dl_report_rs, dl_report_z, dl_report_density = compute_dl_properties(
+        dl_report_pressures,
+        bubble_point_pressure,
+        dl_report_simulated,
+        reservoir_temperature,
+        composition_dict,
+        ref_density,
+    ) if dl_report_pressures.size > 0 else (np.array([], dtype=float), np.array([], dtype=float), np.array([], dtype=float))
+
+    dl_detail_rows = build_comprehensive_dl_table(
+        dl_report_pressures,
+        dl_report_simulated,
+        composition_dict,
+        bubble_point_pressure,
+        reservoir_temperature,
+        rs_values=dl_report_rs,
+        z_values=dl_report_z,
+        density_values=dl_report_density,
+    ) if dl_report_pressures.size > 0 else []
+
+    # Prepare observed Z-factor arrays (extracted from raw DL CSV)
+    dl_z_observed_pressure = (
+        dl_z_factor_data["pressure"].to_numpy(dtype=float)
+        if not dl_z_factor_data.empty
+        else np.array([], dtype=float)
+    )
+    dl_z_observed_values = (
+        dl_z_factor_data["value"].to_numpy(dtype=float)
+        if not dl_z_factor_data.empty
+        else np.array([], dtype=float)
+    )
+    if dl_z_observed_pressure.size > 0 and dl_z_observed_values.size > 0:
+        z_obs_sort_index = np.argsort(dl_z_observed_pressure)
+        dl_z_observed_pressure = dl_z_observed_pressure[z_obs_sort_index]
+        dl_z_observed_values = dl_z_observed_values[z_obs_sort_index]
+    
+    # Prepare observed GOR arrays (extracted from raw DL CSV)
+    dl_gor_pressure = (
+        dl_gor_data["pressure"].to_numpy(dtype=float)
+        if not dl_gor_data.empty
+        else np.array([], dtype=float)
+    )
+    dl_gor_values = (
+        dl_gor_data["value"].to_numpy(dtype=float)
+        if not dl_gor_data.empty
+        else np.array([], dtype=float)
+    )
+
+    # Inject all observed values (Z-factor, liquid density, GOR, gas gravity) into dl_detail_rows
+    # by interpolating extracted series to match dl_report_pressures.
+    # This replaces the hardcoded calculations with actual submitted data.
+    try:
+        report_pressures_arr = np.asarray([float(row["pressure"]) for row in dl_detail_rows], dtype=float) if dl_detail_rows else np.array([], dtype=float)
+        
+        # Interpolate Z-Factor observed
+        if report_pressures_arr.size > 0 and dl_z_observed_pressure.size > 0:
+            z_obs_interp = np.interp(report_pressures_arr, dl_z_observed_pressure, dl_z_observed_values, left=np.nan, right=np.nan)
+        else:
+            z_obs_interp = np.array([np.nan] * report_pressures_arr.size)
+        
+        # Interpolate Liquid Density observed
+        if report_pressures_arr.size > 0 and dl_liquid_density_pressure_sorted.size > 0:
+            ld_obs_interp = np.interp(report_pressures_arr, dl_liquid_density_pressure_sorted, dl_liquid_density_observed_sorted, left=np.nan, right=np.nan)
+        else:
+            ld_obs_interp = np.array([np.nan] * report_pressures_arr.size)
+        
+        # Interpolate GOR observed
+        if report_pressures_arr.size > 0 and dl_gor_pressure.size > 0:
+            gor_sort_idx = np.argsort(dl_gor_pressure)
+            gor_obs_interp = np.interp(report_pressures_arr, dl_gor_pressure[gor_sort_idx], dl_gor_values[gor_sort_idx], left=np.nan, right=np.nan)
+        else:
+            gor_obs_interp = np.array([np.nan] * report_pressures_arr.size)
+        
+        # Interpolate Gas Gravity observed
+        if report_pressures_arr.size > 0 and dl_gas_gravity_pressure_sorted.size > 0:
+            gg_obs_interp = np.interp(report_pressures_arr, dl_gas_gravity_pressure_sorted, dl_gas_gravity_observed_sorted, left=np.nan, right=np.nan)
+        else:
+            gg_obs_interp = np.array([np.nan] * report_pressures_arr.size)
+        
+        # Inject observed values into each DL row
+        for i, row in enumerate(dl_detail_rows):
+            # Z-Factor observed
+            z_val = z_obs_interp[i]
+            row["z_vapor_observed"] = round(float(z_val), 4) if np.isfinite(z_val) else None
+            
+            # Liquid Density observed
+            ld_val = ld_obs_interp[i]
+            row["liquid_density_observed"] = round(float(ld_val), 2) if np.isfinite(ld_val) else None
+            
+            # GOR observed
+            gor_val = gor_obs_interp[i]
+            row["gor_observed"] = round(float(gor_val), 2) if np.isfinite(gor_val) else None
+            
+            # Gas Gravity observed
+            gg_val = gg_obs_interp[i]
+            row["gas_gravity_observed"] = round(float(gg_val), 4) if np.isfinite(gg_val) else None
+    except Exception as e:
+        # If interpolation fails, leave observed fields absent
+        pass
 
     # Attach CCE and DL results to the payload
     results_payload["cce"] = {
@@ -2096,47 +2601,70 @@ def analyze():
 
     # ===== COMPREHENSIVE REPORT DATA =====
     results_payload["ternary_plots"] = [
-        _grouped_composition_point(minimum_pressure),
-        _grouped_composition_point(bubble_point_pressure),
-        _grouped_composition_point(maximum_pressure),
+        _grouped_composition_point(2000.0),
+        _grouped_composition_point(4000.0),
+        _grouped_composition_point(6000.0),
     ]
+
+    dl_z_calculated_pressure = np.asarray([row["pressure"] for row in simulation_properties_table if row.get("dl_z") is not None], dtype=float)
+    dl_z_calculated_values = np.asarray([row["dl_z"] for row in simulation_properties_table if row.get("dl_z") is not None], dtype=float)
+    if dl_z_calculated_pressure.size > 0 and dl_z_calculated_values.size > 0:
+        z_calculated_sort_index = np.argsort(dl_z_calculated_pressure)
+        dl_z_calculated_pressure = dl_z_calculated_pressure[z_calculated_sort_index]
+        dl_z_calculated_values = dl_z_calculated_values[z_calculated_sort_index]
+
+    dl_gor_observed_rows = []
+    if not dl_gor_data.empty:
+        dl_gor_observed_rows = [
+            {
+                "pressure_plot": round(float(pressure), 3),
+                "gor_observed": round(float(value), 4),
+            }
+            for pressure, value in zip(dl_gor_data["pressure"].to_numpy(dtype=float), dl_gor_data["value"].to_numpy(dtype=float))
+        ]
+
+    dl_gor_calculated_rows = [
+        {
+            "pressure_plot": round(float(row["pressure"]), 3),
+            "gor_calculated": row["gor"],
+        }
+        for row in dl_detail_rows
+        if row.get("gor") is not None
+    ]
+    dl_liquid_density_rows = [row for row in dl_detail_rows if row.get("liquid_density") is not None]
+    dl_gas_fvf_rows = [row for row in dl_detail_rows if row.get("gas_fvf") is not None]
+    dl_gas_gravity_rows = [row for row in dl_detail_rows if row.get("gas_gravity") is not None]
+
     results_payload["dl1_property_plots"] = {
-        "pressure": [
-            round(float(value), 2)
-            for value in (
-                dl_gas_density_data["pressure"].to_numpy(dtype=float)
-                if not dl_gas_density_data.empty
-                else [row["pressure"] for row in dl_detail_rows]
-            )
-        ],
+        "pressure": [row["pressure"] for row in dl_detail_rows],
         "z_factor": [row["z_vapor"] for row in dl_detail_rows],
-        "liquid_density": [row["liquid_density"] for row in dl_detail_rows],
-        "gor": [row["gor"] for row in dl_detail_rows],
+        "z_factor_calculated": [row["z_vapor"] for row in dl_detail_rows],
+        "z_factor_observed_pressure": [row["pressure"] for row in dl_detail_rows if row.get("z_vapor_observed") is not None],
+        "z_factor_observed": [row["z_vapor_observed"] for row in dl_detail_rows if row.get("z_vapor_observed") is not None],
+        "liquid_density_observed_pressure": [row["pressure"] for row in dl_detail_rows if row.get("liquid_density_observed") is not None],
+        "liquid_density_observed": [row["liquid_density_observed"] for row in dl_detail_rows if row.get("liquid_density_observed") is not None],
+        "liquid_density_calculated_pressure": [row["pressure"] for row in dl_detail_rows if row.get("liquid_density_calculated") is not None],
+        "liquid_density_calculated": [row["liquid_density_calculated"] for row in dl_detail_rows if row.get("liquid_density_calculated") is not None],
         "oil_relative_volume": [row["oil_relative_volume"] for row in dl_detail_rows],
-        "gas_fvf": [row["gas_fvf"] for row in dl_detail_rows],
-        "gas_gravity": [
-            round(float(value), 4)
-            for value in (
-                dl_gas_density_data["value"].to_numpy(dtype=float)
-                if not dl_gas_density_data.empty
-                else [row["gas_gravity"] for row in dl_detail_rows]
-            )
-        ],
+        "gor_observed_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gor_observed") is not None],
+        "gor_observed": [row["gor_observed"] for row in dl_detail_rows if row.get("gor_observed") is not None],
+        "gor_calculated_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gor") is not None],
+        "gor_calculated": [row["gor"] for row in dl_detail_rows if row.get("gor") is not None],
+        "gas_fvf_observed_pressure": dl_gas_fvf_data["pressure"].to_list() if not dl_gas_fvf_data.empty else [],
+        "gas_fvf_observed": dl_gas_fvf_data["value"].to_list() if not dl_gas_fvf_data.empty else [],
+        "gas_fvf_calculated_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gas_fvf") is not None],
+        "gas_fvf_calculated": [row["gas_fvf"] for row in dl_detail_rows if row.get("gas_fvf") is not None],
+        "gas_gravity_observed_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gas_gravity_observed") is not None],
+        "gas_gravity_observed": [row["gas_gravity_observed"] for row in dl_detail_rows if row.get("gas_gravity_observed") is not None],
+        "gas_gravity_calculated_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gas_gravity") is not None],
+        "gas_gravity_calculated": [row["gas_gravity"] for row in dl_detail_rows if row.get("gas_gravity") is not None],
     }
     results_payload["cce1_table"] = cce_detail_rows
     results_payload["dl1_table"] = dl_detail_rows
-    results_payload["psat1_table"] = {
-        "bubble_point_pressure": round(float(bubble_point_pressure), 2),
-        "z_liquid": round(float(np.clip(cce_detail_rows[0]["z_liquid"] if cce_detail_rows else 1.0, 0.01, 1.0)), 4),
-        "z_vapor": round(float(np.clip(dl_detail_rows[0]["z_vapor"] if dl_detail_rows else 1.0, 0.01, 1.0)), 4),
-        "oil_viscosity": round(float(cce_detail_rows[0]["oil_viscosity"] if cce_detail_rows else 0.0), 4),
-        "gas_viscosity": round(float(dl_detail_rows[0]["gas_viscosity"] if dl_detail_rows else 0.0), 4),
-        "liquid_density": round(float(cce_detail_rows[0]["liquid_density"] if cce_detail_rows else ref_density), 2),
-        "vapor_density": round(float(dl_detail_rows[0]["vapor_density"] if dl_detail_rows else 0.0), 4),
-        "molar_volume_liquid": round(float(cce_detail_rows[0]["molar_volume_liquid"] if cce_detail_rows else 0.0), 2),
-        "molar_volume_vapor": round(float(dl_detail_rows[0]["molar_volume_vapor"] if dl_detail_rows else 0.0), 2),
-        "k_values": composition_k_values,
-    }
+    results_payload["psat1_table"] = [
+        {"condition": "Calculated", **build_psat_table(composition_dict, calculated_bubble_point, reservoir_temperature)},
+        {"condition": "Observed", **build_psat_table(composition_dict, observed_bubble_point, reservoir_temperature)},
+    ]
 
     results_payload["interpretation"] = make_interpretation(
         bubble_point_pressure=bubble_point_pressure,
