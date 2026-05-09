@@ -461,7 +461,8 @@
                     <table class="table table-sm align-middle mb-0">
                         <thead class="position-sticky" style="top: 0; background: white; z-index: 10;">
                             <tr>
-                                <th>Pressure (psi)</th>
+                                <th>Pressure (psig)</th>
+                                <th>Inserted Point</th>
                                 <th>GOR Observed (Mscf/stb)</th>
                                 <th>GOR Calculated (Mscf/stb)</th>
                                 <th>Total Rel Vol</th>
@@ -478,30 +479,29 @@
                                 <th>Gas Visc (cP)</th>
                                 <th>Mol Vol Liq (cm³/mol)</th>
                                 <th>Mol Vol Vap (cm³/mol)</th>
-                                <th>K-CO₂</th><th>K-N₂</th><th>K-C1</th><th>K-C2</th><th>K-C3</th><th>K-iC4</th><th>K-nC4</th><th>K-iC5</th><th>K-nC5</th><th>K-C6</th><th>K-C7+</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for row in results.dl1_table %}
                             <tr>
-                                <td>{{ row.pressure_label or row.pressure }}</td>
-                                <td>{{ row.gor_observed }}</td>
-                                <td>{{ row.gor_calculated }}</td>
-                                <td>{{ row.total_relative_volume }}</td>
-                                <td>{{ row.oil_relative_volume }}</td>
-                                <td>{{ row.liquid_density_observed }}</td>
-                                <td>{{ row.liquid_density_calculated or row.liquid_density }}</td>
-                                <td>{{ row.vapor_density }}</td>
-                                <td>{{ row.gas_gravity }}</td>
-                                <td>{{ row.z_liquid }}</td>
-                                <td>{{ row.z_vapor }}</td>
-                                <td>{{ row.surface_tension }}</td>
-                                <td>{{ row.gas_fvf }}</td>
-                                <td>{{ row.oil_viscosity }}</td>
-                                <td>{{ row.gas_viscosity }}</td>
-                                <td>{{ row.molar_volume_liquid }}</td>
-                                <td>{{ row.molar_volume_vapor }}</td>
-                                {% for k in row.k_values %}<td>{{ k }}</td>{% endfor %}
+                                <td>{{ row.pressure }}</td>
+                                <td>{{ row.inserted_point_label or '' }}</td>
+                                <td>{{ row.gor_observed or '-' }}</td>
+                                <td>{{ row.gor or row.gor_calculated or '-' }}</td>
+                                <td>{{ row.total_relative_volume or '-' }}</td>
+                                <td>{{ row.oil_relative_volume or '-' }}</td>
+                                <td>{{ row.liquid_density_observed or 'None' }}</td>
+                                <td>{{ row.liquid_density_calculated or row.liquid_density or '-' }}</td>
+                                <td>{{ row.vapor_density or '-' }}</td>
+                                <td>{{ row.gas_gravity or '-' }}</td>
+                                <td>{{ row.z_liquid or '-' }}</td>
+                                <td>{{ row.z_vapor or '-' }}</td>
+                                <td>{{ row.surface_tension or '-' }}</td>
+                                <td>{{ row.gas_fvf or '-' }}</td>
+                                <td>{{ row.oil_viscosity or '-' }}</td>
+                                <td>{{ row.gas_viscosity or '-' }}</td>
+                                <td>{{ row.molar_volume_liquid or '-' }}</td>
+                                <td>{{ row.molar_volume_vapor or '-' }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>

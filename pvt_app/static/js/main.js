@@ -1142,7 +1142,7 @@ function initializeCharts() {
         const phaseLoopTemperature = [...resultData.phaseEnvelope.temperature, ...[...resultData.phaseEnvelope.temperature].slice().reverse()];
         const phaseLoopPressure = [...resultData.phaseEnvelope.bubblePressure, ...[...resultData.phaseEnvelope.dewPressure].slice().reverse()];
 
-        // Build the six-variable phase plot: Bubble, Dew, Closed Envelope, Fixed V=0.50, Critical Point, Operating Point
+        // Build the six-variable phase plot: Bubble, Dew, Closed Envelope, Fixed V=0.50, Critical Point
         const fixedVTemp = resultData.phaseEnvelope.temperature.slice();
         const fixedVPressure = fixedVTemp.map((t, i) => {
             const b = Number(resultData.phaseEnvelope.bubblePressure[i]);
@@ -1190,20 +1190,6 @@ function initializeCharts() {
             },
         ];
 
-        // Add operating point marker only when both temperature and pressure are provided
-        const opTempNum = Number(operatingPointTemperature);
-        const opPresNum = Number(operatingPointPressure);
-        if (!Number.isNaN(opTempNum) && !Number.isNaN(opPresNum)) {
-            phaseTraces.push({
-                x: [opTempNum],
-                y: [opPresNum],
-                name: `Bubble Point (${opTempNum.toFixed(1)}°F, ${opPresNum.toFixed(1)} psig)`,
-                type: 'scatter',
-                mode: 'markers',
-                marker: { size: 10, color: '#212529', symbol: 'circle' },
-            });
-        }
-
         const criticalTemp = Number(resultData.phaseEnvelope.criticalTemperature ?? resultData.phaseEnvelope.cricondenthermTemperature);
         const criticalPressure = Number(resultData.phaseEnvelope.criticalPressure ?? resultData.phaseEnvelope.cricondenthermPressure);
         if (Number.isFinite(criticalTemp) && Number.isFinite(criticalPressure)) {
@@ -1217,31 +1203,38 @@ function initializeCharts() {
             });
         }
 
-        // Add markers for cricondenbar and cricondentherm if present
-        const cdbTemp = Number(resultData.phaseEnvelope.cricondenbarTemperature);
-        const cdbPres = Number(resultData.phaseEnvelope.cricondenbarPressure);
-        if (Number.isFinite(cdbTemp) && Number.isFinite(cdbPres)) {
-            phaseTraces.push({
-                x: [cdbTemp],
-                y: [cdbPres],
-                name: 'Cricondenbar',
-                type: 'scatter',
-                mode: 'markers',
-                marker: { size: 10, color: '#8b5cf6', symbol: 'circle' },
-            });
+        // Add CCE1 trace (Constant Composition Expansion) - vertical line at reservoir temperature
+        if (resultData.cce && resultData.cce.pressure && resultData.cce.pressure.length > 0 && operatingPointTemperature) {
+            const cceStartPressure = Number(resultData.cce.pressure[0]);
+            const minPressure = Math.min(...resultData.phaseEnvelope.bubblePressure, ...resultData.phaseEnvelope.dewPressure);
+            const maxPressure = Math.max(...resultData.phaseEnvelope.bubblePressure, ...resultData.phaseEnvelope.dewPressure);
+            if (Number.isFinite(cceStartPressure)) {
+                phaseTraces.push({
+                    x: [operatingPointTemperature, operatingPointTemperature],
+                    y: [minPressure, maxPressure],
+                    name: 'CCE1',
+                    type: 'scatter',
+                    mode: 'lines',
+                    line: { color: '#06b6d4', width: 2.2 },
+                });
+            }
         }
 
-        const cdtTemp = Number(resultData.phaseEnvelope.cricondenthermTemperature);
-        const cdtPres = Number(resultData.phaseEnvelope.cricondenthermPressure);
-        if (Number.isFinite(cdtTemp) && Number.isFinite(cdtPres)) {
-            phaseTraces.push({
-                x: [cdtTemp],
-                y: [cdtPres],
-                name: 'Cricondentherm',
-                type: 'scatter',
-                mode: 'markers',
-                marker: { size: 10, color: '#0f766e', symbol: 'circle' },
-            });
+        // Add DL1 trace (Differential Liberation) - horizontal line at maximum DL pressure
+        if (resultData.dl && resultData.dl.pressure && resultData.dl.pressure.length > 0) {
+            const dlMaxPressure = Math.max(...resultData.dl.pressure.map(p => Number(p)));
+            if (Number.isFinite(dlMaxPressure)) {
+                const minTemp = Math.min(...resultData.phaseEnvelope.temperature);
+                const maxTemp = Math.max(...resultData.phaseEnvelope.temperature);
+                phaseTraces.push({
+                    x: [minTemp, maxTemp],
+                    y: [dlMaxPressure, dlMaxPressure],
+                    name: 'DL1',
+                    type: 'scatter',
+                    mode: 'lines',
+                    line: { color: '#1f77b4', width: 2.2 },
+                });
+            }
         }
 
         const phaseLayout = {
@@ -1257,25 +1250,6 @@ function initializeCharts() {
             hovermode: 'closest',
             height: 320,
             margin: { t: 40, r: 20, b: 60, l: 60 },
-            shapes: (() => {
-                // Only add a vertical operating-point line if a valid temperature is provided
-                const shapes = [];
-                if (!Number.isNaN(opTempNum)) {
-                    shapes.push({
-                        type: 'line',
-                        x0: opTempNum,
-                        y0: Math.min(...resultData.phaseEnvelope.bubblePressure),
-                        x1: opTempNum,
-                        y1: Math.max(...resultData.phaseEnvelope.dewPressure),
-                        line: {
-                            color: '#212529',
-                            width: 1,
-                            dash: 'dash',
-                        },
-                    });
-                }
-                return shapes;
-            })(),
         };
 
         Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
@@ -1736,7 +1710,7 @@ function initializeCharts() {
                 name: 'Calculated',
                 type: 'scatter',
                 mode: 'lines+markers',
-                line: { color: '#0d6efd', width: 2 },
+                line: { color: '#1f77b4', width: 2 },
                 marker: { size: 6 },
             });
         }
@@ -1748,7 +1722,7 @@ function initializeCharts() {
                 name: 'Observed',
                 type: 'scatter',
                 mode: 'lines+markers',
-                line: { color: '#dc3545', width: 2 },
+                line: { color: '#d62728', width: 2 },
                 marker: { size: 6 },
             });
         }
