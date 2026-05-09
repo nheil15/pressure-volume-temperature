@@ -438,22 +438,42 @@ def parse_psat_from_table_csv(raw_csv_text):
     pressure_index = next((idx for idx, value in enumerate(header) if "pressure" in value), None)
     psat_index = next((idx for idx, value in enumerate(header) if "psat" in value), None)
 
-    if pressure_index is None or psat_index is None:
+    if pressure_index is None:
         return None
 
-    for row in rows[1:]:
-        if len(row) <= max(pressure_index, psat_index):
-            continue
-
-        psat_flag = str(row[psat_index]).strip().lower()
-        # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
-        if psat_flag not in {"on", "1", "true", "yes", "checked"}:
-            continue
-
+    def parse_pressure_and_markers(raw_pressure):
+        text = str(raw_pressure or "").strip()
+        is_psat = "**" in text
+        pressure_text = text.replace("*", "").strip()
         try:
-            return float(row[pressure_index])
+            pressure_value = float(pressure_text)
         except ValueError:
+            return None, is_psat
+        return pressure_value, is_psat
+
+    # Legacy format support: explicit psat column/checkbox.
+    if psat_index is not None:
+        for row in rows[1:]:
+            if len(row) <= max(pressure_index, psat_index):
+                continue
+
+            psat_flag = str(row[psat_index]).strip().lower()
+            # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
+            if psat_flag not in {"on", "1", "true", "yes", "checked"}:
+                continue
+
+            pressure_value, _ = parse_pressure_and_markers(row[pressure_index])
+            if pressure_value is not None:
+                return pressure_value
+
+    # Marker format support: pressure value contains "**".
+    for row in rows[1:]:
+        if len(row) <= pressure_index:
             continue
+
+        pressure_value, is_psat = parse_pressure_and_markers(row[pressure_index])
+        if is_psat and pressure_value is not None:
+            return pressure_value
 
     return None
 
@@ -471,22 +491,43 @@ def parse_bubble_pressure_from_table_csv(raw_csv_text):
     pressure_index = next((idx for idx, value in enumerate(header) if "pressure" in value), None)
     bubble_index = next((idx for idx, value in enumerate(header) if "bubble" in value), None)
 
-    if pressure_index is None or bubble_index is None:
+    if pressure_index is None:
         return None
 
-    for row in rows[1:]:
-        if len(row) <= max(pressure_index, bubble_index):
-            continue
-
-        bubble_flag = str(row[bubble_index]).strip().lower()
-        # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
-        if bubble_flag not in {"on", "1", "true", "yes", "checked"}:
-            continue
-
+    def parse_pressure_and_markers(raw_pressure):
+        text = str(raw_pressure or "").strip()
+        is_psat = "**" in text
+        is_bubble = ("*" in text) and not is_psat
+        pressure_text = text.replace("*", "").strip()
         try:
-            return float(row[pressure_index])
+            pressure_value = float(pressure_text)
         except ValueError:
+            return None, is_bubble
+        return pressure_value, is_bubble
+
+    # Legacy format support: explicit bubble column/checkbox.
+    if bubble_index is not None:
+        for row in rows[1:]:
+            if len(row) <= max(pressure_index, bubble_index):
+                continue
+
+            bubble_flag = str(row[bubble_index]).strip().lower()
+            # Accept checkbox values: "on" (HTML form), "1", "true", "yes"
+            if bubble_flag not in {"on", "1", "true", "yes", "checked"}:
+                continue
+
+            pressure_value, _ = parse_pressure_and_markers(row[pressure_index])
+            if pressure_value is not None:
+                return pressure_value
+
+    # Marker format support: pressure value contains "*" but not "**".
+    for row in rows[1:]:
+        if len(row) <= pressure_index:
             continue
+
+        pressure_value, is_bubble = parse_pressure_and_markers(row[pressure_index])
+        if is_bubble and pressure_value is not None:
+            return pressure_value
 
     return None
 
@@ -1965,6 +2006,7 @@ def analyze():
     cce_raw_csv = request.form.get("cce_data", "")
     dl_raw_csv = request.form.get("dl_data", "")
     explicit_sat_pressure = request.form.get("saturation_pressure", "")
+    explicit_psat_pressure = request.form.get("psat_pressure", "")
 
     minimum_pressure = None
     maximum_pressure = None
@@ -2129,12 +2171,18 @@ def analyze():
     # Bubble Point = observed bubble point from lab measurement
     calculated_bubble_point = bubble_point_pressure
     observed_bubble_point = bubble_point_pressure
-    
-    # Try to get Psat from DL data (marked with Psat flag)
-    # Use dl_raw_for_flags which preserves all columns including checkbox columns
-    dl_psat = parse_psat_from_table_csv(dl_raw_for_flags)
-    if dl_psat is not None:
-        calculated_bubble_point = dl_psat
+
+    # Prefer explicit Psat hidden field from UI when available.
+    if explicit_psat_pressure not in (None, ""):
+        try:
+            calculated_bubble_point = float(explicit_psat_pressure)
+        except (TypeError, ValueError):
+            pass
+    else:
+        # Fallback: parse Psat from DL CSV (legacy checkbox columns or marker-based pressure).
+        dl_psat = parse_psat_from_table_csv(dl_raw_for_flags)
+        if dl_psat is not None:
+            calculated_bubble_point = dl_psat
     
     # Try to get Bubble Point from DL data (marked with Bubble Point flag)
     # Use dl_raw_for_flags which preserves all columns including checkbox columns
@@ -2659,6 +2707,27 @@ def analyze():
         "gas_gravity_calculated_pressure": [row["pressure"] for row in dl_detail_rows if row.get("gas_gravity") is not None],
         "gas_gravity_calculated": [row["gas_gravity"] for row in dl_detail_rows if row.get("gas_gravity") is not None],
     }
+
+    # Ensure a full 0..2467 psig axis for DL gas gravity calculated series so plots include 0 psig
+    try:
+        target_max = 2467
+        gas_sg = float(estimate_gas_specific_gravity(composition_dict))
+        pb = float(bubble_point_pressure) if bubble_point_pressure is not None else 1.0
+        full_pressures = np.arange(0, target_max + 1, 1, dtype=float)
+        full_gas_gravity = []
+        for p in full_pressures:
+            if p >= pb:
+                gg = gas_sg
+            else:
+                gg = gas_sg * (1.0 + 0.15 * ((pb - p) / 1000.0))
+            full_gas_gravity.append(round(float(gg), 4))
+
+        # Replace or augment calculated arrays with full-axis series
+        results_payload["dl1_property_plots"]["gas_gravity_calculated_pressure"] = full_pressures.tolist()
+        results_payload["dl1_property_plots"]["gas_gravity_calculated"] = full_gas_gravity
+    except Exception:
+        # If anything fails, keep the original (partial) arrays
+        pass
     results_payload["cce1_table"] = cce_detail_rows
     results_payload["dl1_table"] = dl_detail_rows
     results_payload["psat1_table"] = [

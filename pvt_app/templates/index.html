@@ -36,12 +36,6 @@
         color: #dc3545;
         font-weight: bold;
     }
-
-    .dl-property-chip-selected {
-        background-color: #495057 !important;
-        border-color: #495057 !important;
-        color: #ffffff !important;
-    }
 </style>
 {% endblock %}
 
@@ -52,13 +46,13 @@
             <div class="card-body p-4 p-md-5">
                 <h1 class="h3 mb-3">PVT Analysis</h1>
                 
-                <form action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" class="vstack gap-4" id="pvt_form">
+                <form action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" class="vstack gap-4" id="pvt_form" novalidate>
                     <input type="hidden" id="saturation_pressure" name="saturation_pressure">
                     <input type="hidden" id="psat_pressure" name="psat_pressure">
                     <div class="row g-3">
                         <div class="col-md-5">
                             <label for="reservoir_temperature" class="form-label">Reservoir Temperature (°F)</label>
-                            <input type="number" step="0.1" class="form-control" id="reservoir_temperature" name="reservoir_temperature" placeholder="e.g. 180">
+                            <input type="number" class="form-control" id="reservoir_temperature" name="reservoir_temperature" placeholder="e.g. 180">
                         </div>
                     </div>
 
@@ -85,9 +79,9 @@
                                     <tbody>
                                         <tr>
                                             <td><input type="text" class="form-control form-control-sm" placeholder="Component (e.g. C1)"></td>
-                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
-                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight"></td>
-                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
+                                            <td><input type="number" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
+                                            <td><input type="number" class="form-control form-control-sm" placeholder="Mole Weight"></td>
+                                            <td><input type="number" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
                                             <td class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
@@ -112,17 +106,15 @@
                                 <table class="table table-sm table-bordered mb-2" id="cce_table">
                                     <thead class="table-light">
                                         <tr>
-                                            <th style="width: 40%;">Pressure (PSIG)</th>
-                                            <th style="width: 40%;">Relative Volume</th>
-                                            <th style="width: 20%;">Bubble Point</th>
+                                            <th style="width: 50%;">Pressure (PSIG)</th>
+                                            <th style="width: 50%;">Relative Volume</th>
                                             <th style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <tr>
-                                            <td><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
-                                            <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Value"></td>
-                                            <td class="text-center"><input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio"></td>
+                                            <td><input type="number" class="form-control form-control-sm" placeholder="Pressure"></td>
+                                            <td><input type="number" class="form-control form-control-sm" placeholder="Value"></td>
                                             <td class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
@@ -137,6 +129,10 @@
                                 <span class="text-muted">Detected CCE pressure range:</span>
                                 <strong id="detected_pressure_range" class="ms-1">--</strong>
                             </div>
+                            <div class="alert alert-light border small mt-2 mb-0">
+                                <span class="text-muted">Selected CCE Bubble Point Pressure:</span>
+                                <strong id="selected_cce_bubble_pressure" class="ms-1">--</strong>
+                            </div>
                         </div>
 
                         <div class="col-12">
@@ -145,40 +141,31 @@
                                 <div class="btn-group btn-group-sm">
                                     <button type="button" class="btn btn-outline-danger" id="dl_delete_all">Delete All</button>
                                     <button type="button" class="btn btn-outline-primary" id="dl_add_row">+ Add Row</button>
-                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="false" aria-expanded="false">
-                                        DL Properties
-                                    </button>
-                                    <div class="dropdown-menu dropdown-menu-end p-3 shadow" style="min-width: 18rem;" id="dl_property_menu">
-                                        <div class="fw-semibold mb-1">Add DL property columns</div>
-                                        <p class="text-muted small mb-2">Choose the extra PVT properties you want to add to the DL table.</p>
-                                        <div class="d-grid gap-2" id="dl_property_choices">
-                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="solution_gor">Solution GOR (Mscf/stb)</button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_deviation_factor_z">Gas Deviation Factor Z</button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="reservoir_oil_density">Reservoir Oil Density (lb/ft3)</button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_relative_density">Gas Relative Density</button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary text-start px-3 py-2 dl-property-chip" data-property-key="gas_volume_factor">Gas Volume Factor (rb/Mscf)</button>
-                                        </div>
-                                        <button type="button" class="btn btn-primary btn-sm w-100 mt-3" id="dl_add_properties">Change</button>
-                                    </div>
                                 </div>
                             </div>
                             <div class="table-responsive table-scroll-5">
                                 <table class="table table-sm table-bordered mb-2" id="dl_table">
                                     <thead class="table-light">
                                         <tr>
-                                            <th data-field="pressure" style="width: 40%;">Pressure (PSIG)</th>
-                                            <th data-field="bo" style="width: 40%;">Oil Volume Factor (Bo)</th>
-                                            <th data-field="bubble_point" style="width: 20%;">Bubble Point</th>
-                                            <th data-field="psat" style="width: 20%;">Psat **</th>
+                                            <th data-field="pressure" style="width: 14%;">Pressure (PSIG)</th>
+                                            <th data-field="bo" style="width: 14%;">Oil Volume Factor (Bo)</th>
+                                            <th data-field="solution_gor" style="width: 14%;">Solution GOR (Mscf/stb)</th>
+                                            <th data-field="gas_deviation_factor_z" style="width: 14%;">Gas Deviation Factor Z</th>
+                                            <th data-field="reservoir_oil_density" style="width: 14%;">Res Oil Density (lb/ft³)</th>
+                                            <th data-field="gas_relative_density" style="width: 14%;">Gas Rel Density</th>
+                                            <th data-field="gas_volume_factor" style="width: 14%;">Gas Vol Factor (rb/Mscf)</th>
                                             <th data-field="action" style="width: 8%;">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <tr>
-                                            <td data-field="pressure"><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
-                                            <td data-field="bo"><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Bo"></td>
-                                            <td data-field="bubble_point" class="text-center"><input type="radio" name="dl_bubble" class="form-check-input dl-bubble-radio"></td>
-                                            <td data-field="psat" class="text-center"><input type="radio" name="dl_psat" class="form-check-input dl-psat-radio"></td>
+                                            <td data-field="pressure"><input type="number" class="form-control form-control-sm" placeholder="Pressure"></td>
+                                            <td data-field="bo"><input type="number" class="form-control form-control-sm" placeholder="Bo"></td>
+                                            <td data-field="solution_gor"><input type="number" class="form-control form-control-sm" placeholder="GOR"></td>
+                                            <td data-field="gas_deviation_factor_z"><input type="number" class="form-control form-control-sm" placeholder="Z"></td>
+                                            <td data-field="reservoir_oil_density"><input type="number" class="form-control form-control-sm" placeholder="Density"></td>
+                                            <td data-field="gas_relative_density"><input type="number" class="form-control form-control-sm" placeholder="Density"></td>
+                                            <td data-field="gas_volume_factor"><input type="number" class="form-control form-control-sm" placeholder="GVF"></td>
                                             <td data-field="action" class="text-center row-action-cell"><button type="button" class="btn btn-sm btn-outline-danger row-delete-btn" aria-label="Delete row">x</button></td>
                                         </tr>
                                     </tbody>
@@ -189,6 +176,14 @@
                                 <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" id="dl_convert_btn">Convert</button>
                             </div>
                             <textarea class="form-control d-none" id="dl_data" name="dl_data" rows="5"></textarea>
+                            <div class="alert alert-light border small mt-3 mb-0">
+                                <span class="text-muted">Selected DL Bubble Point Pressure:</span>
+                                <strong id="selected_dl_bubble_pressure" class="ms-1">--</strong>
+                            </div>
+                            <div class="alert alert-light border small mt-2 mb-0">
+                                <span class="text-muted">Selected DL Psat Pressure:</span>
+                                <strong id="selected_dl_psat_pressure" class="ms-1">--</strong>
+                            </div>
                         </div>
                     </div>
 

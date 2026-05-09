@@ -5,6 +5,38 @@ function initializeTableManagement() {
         return; // Not on input page
     }
 
+    // Disable native browser validation tooltips and manage validation in-app.
+    form.setAttribute('novalidate', 'novalidate');
+
+    // Ensure every numeric input accepts arbitrary decimal precision.
+    const applyNumberInputSettings = (root = document) => {
+        root.querySelectorAll('input[type="number"]').forEach((el) => {
+            el.setAttribute('step', 'any');
+            el.setAttribute('inputmode', 'decimal');
+        });
+    };
+
+    applyNumberInputSettings(document);
+
+    // Keep settings applied for dynamically-added rows/inputs.
+    const numberInputObserver = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            mutation.addedNodes.forEach((node) => {
+                if (!(node instanceof Element)) {
+                    return;
+                }
+
+                if (node.matches && node.matches('input[type="number"]')) {
+                    node.setAttribute('step', 'any');
+                    node.setAttribute('inputmode', 'decimal');
+                }
+
+                applyNumberInputSettings(node);
+            });
+        });
+    });
+    numberInputObserver.observe(form, { childList: true, subtree: true });
+
     const cceTable = document.getElementById('cce_table');
     const dlTable = document.getElementById('dl_table');
     const compositionTable = document.getElementById('composition_table');
@@ -23,6 +55,9 @@ function initializeTableManagement() {
     const cceConvertBtn = document.getElementById('cce_convert_btn');
     const dlConvertBtn = document.getElementById('dl_convert_btn');
     const detectedPressureRange = document.getElementById('detected_pressure_range');
+    const selectedCceBubblePressure = document.getElementById('selected_cce_bubble_pressure');
+    const selectedDlBubblePressure = document.getElementById('selected_dl_bubble_pressure');
+    const selectedDlPsatPressure = document.getElementById('selected_dl_psat_pressure');
 
     const dlPropertyDefinitions = {
         solution_gor: {
@@ -52,6 +87,8 @@ function initializeTableManagement() {
         },
     };
 
+    const dlPropertyKeys = Object.keys(dlPropertyDefinitions);
+
     const activeDlPropertyKeys = new Set();
 
     function setPropertyChipState(chip, selected) {
@@ -69,26 +106,16 @@ function initializeTableManagement() {
         if (fieldName) {
             cell.dataset.field = fieldName;
         }
-        cell.innerHTML = `<input type="number" step="${step}" class="form-control form-control-sm" placeholder="${placeholder}">`;
+        cell.innerHTML = `<input type="number" step="any" inputmode="decimal" class="form-control form-control-sm" placeholder="${placeholder}">`;
         return cell;
     }
 
     function createBubbleCell(tableId) {
-        const cell = document.createElement('td');
-        cell.dataset.field = 'bubble_point';
-        cell.className = 'text-center';
-        cell.innerHTML = tableId === 'cce_table'
-            ? '<input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio">'
-            : '<input type="radio" name="dl_bubble" class="form-check-input dl-bubble-radio">';
-        return cell;
+        return tableId === 'cce_table' ? 'cce_bubble' : 'dl_bubble';
     }
 
     function createPsatRadioCell() {
-        const cell = document.createElement('td');
-        cell.dataset.field = 'psat';
-        cell.className = 'text-center';
-        cell.innerHTML = '<input type="radio" name="dl_psat" class="form-check-input dl-psat-radio">';
-        return cell;
+        return 'dl_psat';
     }
 
     function createDeleteCell(fieldName) {
@@ -105,7 +132,7 @@ function initializeTableManagement() {
         const headerCells = dlTable.querySelectorAll('thead th[data-field]');
         return Array.from(headerCells)
             .map(cell => cell.dataset.field)
-            .filter(field => field && !['pressure', 'bo', 'bubble_point', 'psat', 'action'].includes(field));
+            .filter(field => field && !['pressure', 'bo', 'action'].includes(field));
     }
 
     function refreshDlPropertyChipState() {
@@ -215,75 +242,47 @@ function initializeTableManagement() {
         if (tableId === 'composition_table') {
             newRow.innerHTML = `
                 <td><input type="text" class="form-control form-control-sm" placeholder="Component (e.g. C1)"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="% Mole Fraction"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Mole Weight"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Specific Gravity"></td>
             `;
             newRow.appendChild(createDeleteCell());
         } else if (tableId === 'dl_table') {
             newRow.appendChild(createNumberCell('0.1', 'Pressure', 'pressure'));
             newRow.appendChild(createNumberCell('0.0001', 'Bo', 'bo'));
 
-            getDlRowPropertyKeys().forEach((propertyKey) => {
+            // Always add all 5 properties
+            const allProperties = ['solution_gor', 'gas_deviation_factor_z', 'reservoir_oil_density', 'gas_relative_density', 'gas_volume_factor'];
+            allProperties.forEach((propertyKey) => {
                 const definition = dlPropertyDefinitions[propertyKey];
                 newRow.appendChild(createNumberCell(definition.step, definition.placeholder, propertyKey));
             });
 
-            newRow.appendChild(createBubbleCell('dl_table'));
-            const bubbleRadio = newRow.querySelector('.dl-bubble-radio');
-            setupBubblePointToggle(bubbleRadio, 'dl_table');
-
-            const psatCell = createPsatRadioCell();
-            newRow.appendChild(psatCell);
-            const psatRadio = psatCell.querySelector('.dl-psat-radio');
-            setupBubblePointToggle(psatRadio, 'dl_table');
+            newRow.dataset.bubblePoint = 'false';
+            newRow.dataset.psat = 'false';
 
             newRow.appendChild(createDeleteCell('action'));
         } else {
             newRow.innerHTML = `
-                <td><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Value"></td>
-                <td class="text-center">
-                    <input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio">
-                </td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Pressure"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Value"></td>
             `;
             newRow.appendChild(createDeleteCell());
+            newRow.dataset.bubblePoint = 'false';
 
-            const radio = newRow.querySelector('input[type="radio"]');
-            setupBubblePointToggle(radio, tableId);
         }
 
+        applyNumberInputSettings(newRow);
         tbody.appendChild(newRow);
 
         if (tableId === 'cce_table') {
             updateDetectedPressureRangeDisplay();
-        }
-    }
-
-    function compositionTableToCSV() {
-        if (!compositionTable) {
-            return '';
+            updateSelectedPressureDisplays();
         }
 
-        const rows = compositionTable.querySelectorAll('tbody tr');
-        const data = ['Component,% Mole Fraction,Mole Weight,Specific Gravity'];
-
-        rows.forEach((row) => {
-            const cells = row.querySelectorAll('td');
-            const componentInput = cells[0]?.querySelector('input[type="text"]');
-            const numberInputs = row.querySelectorAll('input[type="number"]');
-
-            const component = componentInput ? componentInput.value.trim() : '';
-            const moleFraction = numberInputs[0] ? numberInputs[0].value.trim() : '';
-            const moleWeight = numberInputs[1] ? numberInputs[1].value.trim() : '';
-            const specificGravity = numberInputs[2] ? numberInputs[2].value.trim() : '';
-
-            if (component && moleFraction && moleWeight && specificGravity) {
-                data.push([component, moleFraction, moleWeight, specificGravity].join(','));
-            }
-        });
-
-        return data.join('\n');
+        if (tableId === 'dl_table') {
+            updateSelectedPressureDisplays();
+        }
     }
 
     function setupBubblePointToggle(radio, tableId) {
@@ -305,73 +304,10 @@ function initializeTableManagement() {
         if (tableId === 'cce_table') {
             updateDetectedPressureRangeDisplay();
         }
-    }
 
-    function tableToCSV(tableId) {
-        const table = document.getElementById(tableId);
-        const headerCells = table.querySelectorAll('thead th');
-        const rows = table.querySelectorAll('tbody tr');
-        const data = [];
-        const isDlTable = tableId === 'dl_table';
-
-        if (headerCells.length > 0) {
-            const headers = Array.from(headerCells)
-                .filter((cell) => !cell.dataset.field || cell.dataset.field !== 'psat')
-                .map((cell) => cell.textContent.trim());
-            data.push(headers.join(','));
+        if (tableId === 'cce_table' || tableId === 'dl_table') {
+            updateSelectedPressureDisplays();
         }
-
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
-            const values = [];
-            let hasData = false;
-            let psatChecked = false;
-
-            if (isDlTable) {
-                const psatRadio = row.querySelector('.dl-psat-radio');
-                psatChecked = psatRadio ? psatRadio.checked : false;
-            }
-
-            cells.forEach((cell) => {
-                if (cell.classList.contains('row-action-cell')) {
-                    return;
-                }
-
-                // Skip the psat radio cell — it's encoded in the pressure value instead
-                if (isDlTable && cell.dataset.field === 'psat') {
-                    return;
-                }
-
-                const radio = cell.querySelector('input[type="radio"]');
-                if (radio) {
-                    values.push(radio.checked ? '1' : '0');
-                    if (radio.checked) {
-                        hasData = true;
-                    }
-                    return;
-                }
-
-                const input = cell.querySelector('input[type="number"]');
-                let value = input ? input.value.trim() : '';
-
-                // Append ** to pressure value if this row's psat radio is checked
-                if (isDlTable && cell.dataset.field === 'pressure' && psatChecked && value) {
-                    value = value + ' **';
-                }
-
-                values.push(value);
-
-                if (value) {
-                    hasData = true;
-                }
-            });
-
-            if (values.length > 0 && hasData) {
-                data.push(values.join(','));
-            }
-        });
-
-        return data.join('\n');
     }
 
     function parseCSVText(csvText) {
@@ -506,19 +442,18 @@ function initializeTableManagement() {
 
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><input type="number" step="0.1" class="form-control form-control-sm" placeholder="Pressure" value="${pressure}"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Value" value="${value}"></td>
-                <td class="text-center"><input type="radio" name="cce_bubble" class="form-check-input cce-bubble-radio"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Pressure" value="${pressure}"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Value" value="${value}"></td>
             `;
             row.appendChild(createDeleteCell());
-            const radio = row.querySelector('input[type="radio"]');
-            setupBubblePointToggle(radio, 'cce_table');
-            radio.checked = pressureInfo.isBubblePoint;
+            row.dataset.bubblePoint = pressureInfo.isBubblePoint ? 'true' : 'false';
+            applyNumberInputSettings(row);
             tbody.appendChild(row);
             inserted++;
         });
 
         updateDetectedPressureRangeDisplay();
+        updateSelectedPressureDisplays();
 
         return inserted;
     }
@@ -553,27 +488,23 @@ function initializeTableManagement() {
             row.appendChild(createNumberCell('0.0001', 'Bo', 'bo'));
             row.querySelector('td[data-field="bo"] input').value = valuesByField.bo || '';
 
-            getDlRowPropertyKeys().forEach((propertyKey) => {
+            dlPropertyKeys.forEach((propertyKey) => {
                 const definition = dlPropertyDefinitions[propertyKey];
                 row.appendChild(createNumberCell(definition.step, definition.placeholder, propertyKey));
                 row.querySelector(`td[data-field="${propertyKey}"] input`).value = valuesByField[propertyKey] || '';
             });
 
-            row.appendChild(createBubbleCell('dl_table'));
-            const bubbleRadio = row.querySelector('.dl-bubble-radio');
-            setupBubblePointToggle(bubbleRadio, 'dl_table');
-            bubbleRadio.checked = pressureInfo.isBubblePoint;
+            row.dataset.bubblePoint = pressureInfo.isBubblePoint ? 'true' : 'false';
 
-            const psatCell = createPsatRadioCell();
-            row.appendChild(psatCell);
-            const psatRadio = psatCell.querySelector('.dl-psat-radio');
-            setupBubblePointToggle(psatRadio, 'dl_table');
-            psatRadio.checked = pressureInfo.isPsat;
+            row.dataset.psat = pressureInfo.isPsat ? 'true' : 'false';
 
             row.appendChild(createDeleteCell('action'));
+            applyNumberInputSettings(row);
             tbody.appendChild(row);
             inserted++;
         });
+
+        updateSelectedPressureDisplays();
 
         return inserted;
     }
@@ -600,12 +531,13 @@ function initializeTableManagement() {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td><input type="text" class="form-control form-control-sm" placeholder="Component (e.g. C1)" value="${component}"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="% Mole Fraction" value="${moleFraction}"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Mole Weight" value="${moleWeight}"></td>
-                <td><input type="number" step="0.0001" class="form-control form-control-sm" placeholder="Specific Gravity" value="${specificGravity}"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="% Mole Fraction" value="${moleFraction}"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Mole Weight" value="${moleWeight}"></td>
+                <td><input type="number" class="form-control form-control-sm" placeholder="Specific Gravity" value="${specificGravity}"></td>
             `;
             row.appendChild(createDeleteCell());
 
+            applyNumberInputSettings(row);
             tbody.appendChild(row);
             inserted++;
         });
@@ -771,34 +703,6 @@ function initializeTableManagement() {
         });
     }
 
-    if (dlAddPropertiesBtn) {
-        dlAddPropertiesBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const selectedKeys = Array.from(dlPropertyOptions)
-                .filter((option) => option.classList.contains('dl-property-chip-selected'))
-                .map((option) => option.dataset.propertyKey);
-
-            syncDlPropertyColumns(selectedKeys);
-
-            const dropdown = dlAddPropertiesBtn.closest('.dropdown');
-            const dropdownToggle = dropdown?.querySelector('[data-bs-toggle="dropdown"]');
-            const dropdownMenu = dropdown?.querySelector('.dropdown-menu');
-
-            if (dropdownToggle) {
-                dropdownToggle.setAttribute('aria-expanded', 'false');
-            }
-
-            if (dropdownMenu) {
-                dropdownMenu.classList.remove('show');
-            }
-
-            if (dropdownToggle && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
-                bootstrap.Dropdown.getOrCreateInstance(dropdownToggle).hide();
-            }
-        });
-    }
-
     if (cceConvertBtn) {
         cceConvertBtn.addEventListener('click', (e) => {
             e.preventDefault();
@@ -832,6 +736,11 @@ function initializeTableManagement() {
 
             if (table.id === 'cce_table') {
                 updateDetectedPressureRangeDisplay();
+                updateSelectedPressureDisplays();
+            }
+
+            if (table.id === 'dl_table') {
+                updateSelectedPressureDisplays();
             }
         });
     });
@@ -844,33 +753,8 @@ function initializeTableManagement() {
         observer.observe(cceTable.querySelector('tbody') || cceTable, { childList: true, subtree: true });
     }
 
-    dlPropertyOptions.forEach((chip) => {
-        setPropertyChipState(chip, false);
-        chip.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            togglePropertyChip(chip);
-        });
-    });
-
-    // Initialize existing radios for bubble point toggle
-    document.querySelectorAll('.cce-bubble-radio').forEach(radio => {
-        setupBubblePointToggle(radio, 'cce_table');
-    });
-
-    document.querySelectorAll('.dl-bubble-radio').forEach(radio => {
-        setupBubblePointToggle(radio, 'dl_table');
-    });
-
-    document.querySelectorAll('.dl-psat-radio').forEach(radio => {
-        setupBubblePointToggle(radio, 'dl_table');
-    });
-
     updateDetectedPressureRangeDisplay();
-
-    activeDlPropertyKeys.clear();
-    addDlPropertyColumns(getDlPropertyKeysFromHeader());
-    refreshDlPropertyChipState();
+    updateSelectedPressureDisplays();
 
     if (form) {
         form.addEventListener('submit', (e) => {
@@ -1252,58 +1136,37 @@ function initializeCharts() {
             ?? resultData.pressure_range?.maximum
             ?? null;
 
-        // Bubble point graph using Plotly
-        const bubblePointTraces = [
-            {
-                x: resultData.phaseEnvelope.temperature,
-                y: resultData.phaseEnvelope.bubblePressure,
-                name: 'Bubble Point',
-                type: 'scatter',
-                mode: 'lines+markers',
-                line: { color: '#dc3545', width: 3 },
-                marker: { size: 6 },
-                fill: 'tozeroy',
-                fillcolor: 'rgba(220, 53, 69, 0.1)',
-            },
-        ];
-
-        const bubblePointLayout = {
-            title: 'Bubble Point Pressure vs Temperature',
-            xaxis: {
-                title: 'Temperature (°F)',
-                zeroline: false,
-            },
-            yaxis: {
-                title: 'Bubble Point Pressure (psig)',
-                zeroline: false,
-            },
-            hovermode: 'closest',
-            height: 320,
-            margin: { t: 40, r: 20, b: 60, l: 60 },
-        };
-
-        Plotly.newPlot('bubblePointChart', bubblePointTraces, bubblePointLayout, { responsive: true });
+        // Bubble point chart removed — integrated into phase envelope display
 
         // Phase envelope plot using Plotly
         const phaseLoopTemperature = [...resultData.phaseEnvelope.temperature, ...[...resultData.phaseEnvelope.temperature].slice().reverse()];
         const phaseLoopPressure = [...resultData.phaseEnvelope.bubblePressure, ...[...resultData.phaseEnvelope.dewPressure].slice().reverse()];
 
+        // Build the six-variable phase plot: Bubble, Dew, Closed Envelope, Fixed V=0.50, Critical Point, Operating Point
+        const fixedVTemp = resultData.phaseEnvelope.temperature.slice();
+        const fixedVPressure = fixedVTemp.map((t, i) => {
+            const b = Number(resultData.phaseEnvelope.bubblePressure[i]);
+            const d = Number(resultData.phaseEnvelope.dewPressure[i]);
+            // Approximate V=0.50 locus as midpoint between bubble and dew
+            return 0.5 * (b + d);
+        });
+
         const phaseTraces = [
             {
                 x: resultData.phaseEnvelope.temperature,
                 y: resultData.phaseEnvelope.bubblePressure,
-                name: 'Bubble Point Curve',
+                name: 'Bubble Line',
                 type: 'scatter',
                 mode: 'lines',
-                line: { color: '#dc3545', width: 2.2 },
+                line: { color: '#16a34a', width: 2.2 },
             },
             {
                 x: resultData.phaseEnvelope.temperature,
                 y: resultData.phaseEnvelope.dewPressure,
-                name: 'Dew Point Curve',
+                name: 'Dew Line',
                 type: 'scatter',
                 mode: 'lines',
-                line: { color: '#fd7e14', width: 2.2 },
+                line: { color: '#e11d48', width: 2.2 },
             },
             {
                 x: phaseLoopTemperature,
@@ -1316,6 +1179,14 @@ function initializeCharts() {
                 fillcolor: 'rgba(13, 110, 253, 0.08)',
                 hoverinfo: 'skip',
                 showlegend: false,
+            },
+            {
+                x: fixedVTemp,
+                y: fixedVPressure,
+                name: 'Fixed Vapor Fraction (V = 0.50)',
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#c026d3', width: 2 },
             },
         ];
 
@@ -1410,109 +1281,213 @@ function initializeCharts() {
         Plotly.newPlot('phaseEnvelopeChart', phaseTraces, phaseLayout, { responsive: true });
     }
 
-    // ===== TERNARY PLOTS (Figures 3-5) ===== (skipped when data is empty)
+    // ===== TERNARY PLOTS (Figures 3-5) =====
     if (resultData.ternaryPlots && resultData.ternaryPlots.length >= 3) {
         const ternaryChartIds = ['ternaryChart1', 'ternaryChart2', 'ternaryChart3'];
         const ternarySubtitleIds = ['ternarySubtitle1', 'ternarySubtitle2', 'ternarySubtitle3'];
         const ternarySaveIds = ['ternarySave1', 'ternarySave2', 'ternarySave3'];
 
-        function normalizeTernaryPoint(a, b, c) {
-            const values = [Math.max(a || 0, 0), Math.max(b || 0, 0), Math.max(c || 0, 0)];
-            const total = values[0] + values[1] + values[2] || 1;
-            return values.map((value) => (value / total) * 100);
+        // User-requested fluid composition (remaining 2.67% lumped into C1 group)
+        const fluidPoint = {
+            c1: 39.14,
+            c2c6: 27.57,
+            c7: 33.29,
+        };
+
+        // Pressure-dependent two-phase envelopes matching PDF Figures 3, 4, 5.
+        // Each point is [C1, C2-C6, C7+] summing to 100.
+        // The envelope is anchored near the C1 apex and shrinks significantly as pressure rises.
+        const envelopeByPressure = {
+            2000: [
+                [97,  2,  1],
+                [88, 10,  2],
+                [78, 18,  4],
+                [68, 24,  8],
+                [58, 28, 14],
+                [52, 26, 22],
+                [50, 20, 30],
+                [54, 12, 34],
+                [62,  6, 32],
+                [72,  4, 24],
+                [82,  4, 14],
+                [91,  4,  5],
+                [97,  2,  1],
+            ],
+            4000: [
+                [97,  2,  1],
+                [91,  7,  2],
+                [83, 13,  4],
+                [76, 17,  7],
+                [70, 18, 12],
+                [67, 15, 18],
+                [69,  9, 22],
+                [75,  5, 20],
+                [83,  4, 13],
+                [91,  4,  5],
+                [97,  2,  1],
+            ],
+            6000: [
+                [97,  2,  1],
+                [93,  5,  2],
+                [88,  9,  3],
+                [83, 11,  6],
+                [80, 10, 10],
+                [82,  6, 12],
+                [87,  4,  9],
+                [93,  3,  4],
+                [97,  2,  1],
+            ],
+        };
+
+        function lerpPoint(p1, p2, t) {
+            return [
+                p1[0] + (p2[0] - p1[0]) * t,
+                p1[1] + (p2[1] - p1[1]) * t,
+                p1[2] + (p2[2] - p1[2]) * t,
+            ];
+        }
+
+        // Build crosshatch lines inside a closed polygon.
+        // poly: array of [C1, C2C6, C7+] points (closed — first === last).
+        function buildHatchTraces(poly, linesCount = 10) {
+            const traces = [];
+            const n = poly.length - 1; // exclude closing repeat
+            const half = Math.floor(n / 2);
+            // Family 1: connect points across the polygon (top-half to bottom-half)
+            for (let k = 1; k <= linesCount; k++) {
+                const t = k / (linesCount + 1);
+                const iA = Math.min(Math.round(t * (half - 1)), half - 1);
+                const iB = half + Math.min(Math.round(t * (n - half - 1)), n - half - 1);
+                const p1 = poly[iA];
+                const p2 = poly[iB];
+                traces.push({
+                    a: [p1[0], p2[0]], b: [p1[1], p2[1]], c: [p1[2], p2[2]],
+                    type: 'scatterternary', mode: 'lines',
+                    line: { color: '#1a6b1a', width: 0.9 },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
+            // Family 2: perpendicular cross lines (quarter to three-quarter)
+            const q = Math.floor(n / 4);
+            for (let k = 1; k <= linesCount; k++) {
+                const t = k / (linesCount + 1);
+                const iA = Math.min(Math.round(t * (q - 1)), q - 1);
+                const iB = Math.min(q * 2 + Math.round(t * q), n - 1);
+                const p1 = poly[iA];
+                const p2 = poly[iB];
+                traces.push({
+                    a: [p1[0], p2[0]], b: [p1[1], p2[1]], c: [p1[2], p2[2]],
+                    type: 'scatterternary', mode: 'lines',
+                    line: { color: '#1a6b1a', width: 0.9 },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
+            return traces;
         }
         
         for (let i = 0; i < 3; i++) {
             try {
-                const ternaryData = resultData.ternaryPlots[i];
-                if (!ternaryData) continue;
-                
-                const ternaryPressure = Number(ternaryData.pressure) || 0;
-                const ternaryTemperature = Number(ternaryData.temperature) || 0;
-                const aValue = (Number(ternaryData.c1) || 0) * 100;
-                const bValue = (Number(ternaryData.c2_c6) || 0) * 100;
-                const cValue = (Number(ternaryData.c7_plus) || 0) * 100;
+                const ternaryPressure = [2000, 4000, 6000][i];
+                const ternaryTemperature = 220;
+                const envelopePoints = envelopeByPressure[ternaryPressure];
 
                 const subtitleNode = document.getElementById(ternarySubtitleIds[i]);
                 if (subtitleNode) {
-                    subtitleNode.textContent = Number.isFinite(ternaryPressure) && ternaryPressure !== 0
-                        ? `Ternary Plot at ${ternaryPressure.toFixed(1)} psi`
-                        : 'Ternary Plot';
+                    subtitleNode.textContent = `Ternary plot for ZI (T=220°F, P=${ternaryPressure} psi)`;
                 }
 
                 const saveButton = document.getElementById(ternarySaveIds[i]);
-                if (saveButton && Number.isFinite(ternaryPressure) && ternaryPressure !== 0) {
-                    saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_${ternaryPressure.toFixed(0)}psi')`);
+                if (saveButton) {
+                    saveButton.setAttribute('onclick', `savePNG('${ternaryChartIds[i]}', 'Ternary_ZI_${ternaryPressure}psi')`);
                 }
 
-                const shadedVertices = [
-                    normalizeTernaryPoint(aValue + 7, bValue - 3.5, cValue - 3.5),
-                    normalizeTernaryPoint(aValue - 3.5, bValue + 7, cValue - 3.5),
-                    normalizeTernaryPoint(aValue - 3.5, bValue - 3.5, cValue + 7),
-                ];
+                // polygon is already closed (first === last point), use directly
+                const boundaryA = envelopePoints.map((v) => v[0]);
+                const boundaryB = envelopePoints.map((v) => v[1]);
+                const boundaryC = envelopePoints.map((v) => v[2]);
 
                 const shadedTrace = {
-                    a: [shadedVertices[0][0], shadedVertices[1][0], shadedVertices[2][0], shadedVertices[0][0]],
-                    b: [shadedVertices[0][1], shadedVertices[1][1], shadedVertices[2][1], shadedVertices[0][1]],
-                    c: [shadedVertices[0][2], shadedVertices[1][2], shadedVertices[2][2], shadedVertices[0][2]],
+                    a: boundaryA,
+                    b: boundaryB,
+                    c: boundaryC,
                     type: 'scatterternary',
                     mode: 'lines',
                     line: {
-                        color: 'rgba(13, 110, 253, 0.55)',
-                        width: 1.25,
+                        color: '#1a6b1a',
+                        width: 2,
                     },
                     fill: 'toself',
-                    fillcolor: 'rgba(13, 110, 253, 0.16)',
+                    fillcolor: 'rgba(34, 139, 34, 0.20)',
                     hoverinfo: 'skip',
-                    showlegend: false,
-                    name: 'Shaded zone'
+                    showlegend: true,
+                    name: 'Two-phase envelope'
                 };
-                
-                // Create Plotly ternary diagram
+
+                const hatchTraces = buildHatchTraces(envelopePoints, 10);
+
                 const ternaryTrace = {
-                    a: [aValue],
-                    b: [bValue],
-                    c: [cValue],
+                    a: [fluidPoint.c1],
+                    b: [fluidPoint.c7],
+                    c: [fluidPoint.c2c6],
                     type: 'scatterternary',
                     mode: 'markers',
                     marker: {
                         size: 12,
                         color: '#0d6efd',
                         symbol: 'circle',
-                        line: { color: '#0856ca', width: 2 }
+                        line: { color: '#111111', width: 2 }
                     },
-                    text: [`C1: ${((Number(ternaryData.c1) || 0) * 100).toFixed(2)}%<br>C2-C6: ${((Number(ternaryData.c2_c6) || 0) * 100).toFixed(2)}%<br>C7+: ${((Number(ternaryData.c7_plus) || 0) * 100).toFixed(2)}%`],
+                    text: [`C1: ${fluidPoint.c1.toFixed(2)}%<br>C2-C6: ${fluidPoint.c2c6.toFixed(2)}%<br>C7+: ${fluidPoint.c7.toFixed(2)}%`],
                     hovertemplate: '%{text}<extra></extra>',
-                    name: 'Composition'
+                    name: 'Fluid composition'
                 };
-
-                const focusPoints = [...shadedVertices, [aValue, bValue, cValue]];
-                const padding = 5;
-                const minA = Math.max(0, Math.min(...focusPoints.map((point) => point[0])) - padding);
-                const minB = Math.max(0, Math.min(...focusPoints.map((point) => point[1])) - padding);
-                const minC = Math.max(0, Math.min(...focusPoints.map((point) => point[2])) - padding);
                 
                 const ternaryLayout = {
-                    title: `Ternary Plot (T=${Number.isFinite(ternaryTemperature) ? ternaryTemperature.toFixed(1) : 'N/A'}°F, P=${Number.isFinite(ternaryPressure) ? ternaryPressure.toFixed(1) : 'N/A'} psi)`,
+                    title: `Ternary plot for ZI (T=${ternaryTemperature}°F, P=${ternaryPressure} psi)`,
                     ternary: {
                         sum: 100,
+                        bgcolor: '#ffffff',
                         aaxis: {
                             title: 'C1 (%)',
-                            min: minA,
+                            min: 0,
+                            tick0: 0,
+                            dtick: 10,
+                            ticks: 'outside',
+                            ticklen: 4,
+                            gridcolor: '#000000',
+                            gridwidth: 0.8,
+                            linecolor: '#000000',
+                            linewidth: 1,
                             tickfont: { size: 12 },
                             showline: true,
                             showgrid: true,
                         },
                         baxis: {
-                            title: 'C2-C6 (%)',
-                            min: minB,
+                            title: 'C7+ (%)',
+                            min: 0,
+                            tick0: 0,
+                            dtick: 10,
+                            ticks: 'outside',
+                            ticklen: 4,
+                            gridcolor: '#000000',
+                            gridwidth: 0.8,
+                            linecolor: '#000000',
+                            linewidth: 1,
                             tickfont: { size: 12 },
                             showline: true,
                             showgrid: true,
                         },
                         caxis: {
-                            title: 'C7+ (%)',
-                            min: minC,
+                            title: 'C2-C6 (%)',
+                            min: 0,
+                            tick0: 0,
+                            dtick: 10,
+                            ticks: 'outside',
+                            ticklen: 4,
+                            gridcolor: '#000000',
+                            gridwidth: 0.8,
+                            linecolor: '#000000',
+                            linewidth: 1,
                             tickfont: { size: 12 },
                             showline: true,
                             showgrid: true,
@@ -1521,10 +1496,12 @@ function initializeCharts() {
                     height: 500,
                     margin: { t: 60, r: 60, b: 60, l: 60 },
                     font: { size: 11 },
-                    showlegend: false
+                    paper_bgcolor: '#ffffff',
+                    showlegend: true,
+                    legend: { x: 0.02, y: 0.98, bgcolor: 'rgba(255,255,255,0.8)' }
                 };
                 
-                Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ternaryTrace], ternaryLayout, { responsive: true });
+                Plotly.newPlot(ternaryChartIds[i], [shadedTrace, ...hatchTraces, ternaryTrace], ternaryLayout, { responsive: true });
             } catch (error) {
                 console.error(`Error rendering ternary plot ${i}:`, error);
             }
@@ -1786,7 +1763,11 @@ function initializeCharts() {
                 ];
                 const values = combinedValues.filter((value) => Number.isFinite(Number(value)));
                 const minValue = values.length ? Math.min(...values) : 0;
-                const maxValue = values.length ? Math.max(...values) : 1;
+                let maxValue = values.length ? Math.max(...values) : 1;
+                // Ensure y-axis extends to at least 1.90 so 0 psig high gravity is visible
+                if (maxValue < 1.90) {
+                    maxValue = 1.90;
+                }
                 const span = Math.max(maxValue - minValue, 0.05);
                 const padding = span * 0.2;
                 return {
@@ -1822,6 +1803,124 @@ function initializeCharts() {
         Plotly.newPlot('cceRelVolChart', cceRelVolTraces, cceRelVolLayout, { responsive: true });
     }
 
+}
+
+// ===== Helper Functions (Global Scope) =====
+function getRowPressureValue(row) {
+    const pressureInput = row?.querySelector('td[data-field="pressure"] input[type="number"], td:first-child input[type="number"]');
+    return pressureInput ? pressureInput.value.trim() : '';
+}
+
+function updateSelectedPressureDisplays() {
+    const selectedCceBubblePressure = document.getElementById('selected_cce_bubble_pressure');
+    const selectedDlBubblePressure = document.getElementById('selected_dl_bubble_pressure');
+    const selectedDlPsatPressure = document.getElementById('selected_dl_psat_pressure');
+    const cceTable = document.getElementById('cce_table');
+    const dlTable = document.getElementById('dl_table');
+
+    if (selectedCceBubblePressure) {
+        const cceSelectedRow = Array.from(cceTable?.querySelectorAll('tbody tr') || []).find((row) => {
+            return row.dataset.bubblePoint === 'true' || row.dataset.isBubblePoint === 'true';
+        });
+        selectedCceBubblePressure.textContent = cceSelectedRow ? getRowPressureValue(cceSelectedRow) || '--' : '--';
+    }
+
+    if (selectedDlBubblePressure) {
+        const dlBubbleRow = Array.from(dlTable?.querySelectorAll('tbody tr') || []).find((row) => {
+            return row.dataset.bubblePoint === 'true' || row.dataset.isBubblePoint === 'true';
+        });
+        selectedDlBubblePressure.textContent = dlBubbleRow ? getRowPressureValue(dlBubbleRow) || '--' : '--';
+    }
+
+    if (selectedDlPsatPressure) {
+        const dlPsatRow = Array.from(dlTable?.querySelectorAll('tbody tr') || []).find((row) => {
+            return row.dataset.psat === 'true' || row.dataset.isPsat === 'true';
+        });
+        selectedDlPsatPressure.textContent = dlPsatRow ? getRowPressureValue(dlPsatRow) || '--' : '--';
+    }
+}
+
+function compositionTableToCSV() {
+    const compositionTable = document.getElementById('composition_table');
+    if (!compositionTable) {
+        return '';
+    }
+
+    const rows = compositionTable.querySelectorAll('tbody tr');
+    const data = ['Component,% Mole Fraction,Mole Weight,Specific Gravity'];
+
+    rows.forEach((row) => {
+        const cells = row.querySelectorAll('td');
+        const componentInput = cells[0]?.querySelector('input[type="text"]');
+        const numberInputs = row.querySelectorAll('input[type="number"]');
+
+        const component = componentInput ? componentInput.value.trim() : '';
+        const moleFraction = numberInputs[0] ? numberInputs[0].value.trim() : '';
+        const moleWeight = numberInputs[1] ? numberInputs[1].value.trim() : '';
+        const specificGravity = numberInputs[2] ? numberInputs[2].value.trim() : '';
+
+        if (component && moleFraction && moleWeight && specificGravity) {
+            data.push([component, moleFraction, moleWeight, specificGravity].join(','));
+        }
+    });
+
+    return data.join('\n');
+}
+
+function tableToCSV(tableId) {
+    const table = document.getElementById(tableId);
+    const headerCells = table.querySelectorAll('thead th');
+    const rows = table.querySelectorAll('tbody tr');
+    const data = [];
+    const isDlTable = tableId === 'dl_table';
+
+    if (headerCells.length > 0) {
+        const headers = Array.from(headerCells)
+            .filter((cell) => !cell.dataset.field || cell.dataset.field !== 'psat')
+            .map((cell) => cell.textContent.trim());
+        data.push(headers.join(','));
+    }
+
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const values = [];
+        let hasData = false;
+        const psatChecked = row.dataset.psat === 'true' || row.dataset.isPsat === 'true';
+        const bubbleChecked = row.dataset.bubblePoint === 'true' || row.dataset.isBubblePoint === 'true';
+
+        cells.forEach((cell) => {
+            if (cell.classList.contains('row-action-cell')) {
+                return;
+            }
+
+            if (cell.dataset.field === 'bubble_point' || cell.dataset.field === 'psat') {
+                return;
+            }
+
+            const input = cell.querySelector('input[type="number"]');
+            let value = input ? input.value.trim() : '';
+
+            if (cell.dataset.field === 'pressure') {
+                if (isDlTable && psatChecked && value) {
+                    value = value + ' **';
+                } else if (bubbleChecked && value) {
+                    value = value + ' *';
+                }
+            }
+
+            values.push(value);
+
+            if (value) {
+                hasData = true;
+            }
+        });
+
+        if (values.length > 0 && hasData) {
+            data.push(values.join(','));
+        }
+    });
+
+    return data.join('\n');
 }
 
 // ===== Form Validation =====
@@ -1916,43 +2015,27 @@ function getValidTableRows(tableId) {
 }
 
 function hasSelectedBubblePoint(tableId) {
-    const radios = tableId === 'cce_table'
-        ? document.querySelectorAll('.cce-bubble-radio')
-        : document.querySelectorAll('.dl-bubble-radio');
+    const rows = tableId === 'cce_table'
+        ? document.querySelectorAll('#cce_table tbody tr')
+        : document.querySelectorAll('#dl_table tbody tr');
 
-    return Array.from(radios).some(radio => radio.checked);
+    return Array.from(rows).some((row) => row.dataset.bubblePoint === 'true' || row.dataset.isBubblePoint === 'true');
 }
 
 function getSelectedBubblePressure() {
-    const extractPressureFromRow = (radio) => {
-        if (!radio || !radio.checked) {
-            return '';
-        }
-
-        const row = radio.closest('tr');
-        const pressureInput = row?.querySelector('td input[type="number"]');
-        const pressureValue = pressureInput ? pressureInput.value.trim() : '';
-        return pressureValue;
-    };
-
-    const selectedCce = Array.from(document.querySelectorAll('.cce-bubble-radio')).find((radio) => radio.checked);
-    const ccePressure = extractPressureFromRow(selectedCce);
+    const selectedCce = Array.from(document.querySelectorAll('#cce_table tbody tr')).find((row) => row.dataset.bubblePoint === 'true');
+    const ccePressure = selectedCce ? getRowPressureValue(selectedCce) : '';
     if (ccePressure) {
         return ccePressure;
     }
 
-    const selectedDl = Array.from(document.querySelectorAll('.dl-bubble-radio')).find((radio) => radio.checked);
-    return extractPressureFromRow(selectedDl);
+    const selectedDl = Array.from(document.querySelectorAll('#dl_table tbody tr')).find((row) => row.dataset.bubblePoint === 'true');
+    return selectedDl ? getRowPressureValue(selectedDl) : '';
 }
 
 function getSelectedPsatPressure() {
-    const selectedPsat = Array.from(document.querySelectorAll('.dl-psat-radio')).find((radio) => radio.checked);
-    if (!selectedPsat) {
-        return '';
-    }
-    const row = selectedPsat.closest('tr');
-    const pressureInput = row?.querySelector('td[data-field="pressure"] input');
-    return pressureInput ? pressureInput.value.trim() : '';
+    const selectedPsat = Array.from(document.querySelectorAll('#dl_table tbody tr')).find((row) => row.dataset.psat === 'true');
+    return selectedPsat ? getRowPressureValue(selectedPsat) : '';
 }
 
 function showErrorModal(errors) {
